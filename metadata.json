@@ -1,0 +1,5 @@
+{
+  "name": "Slop Board",
+  "description": "A professional cinematic storyboarding application powered by Gemini 3. Features script-to-visual generation, film stock emulation, lens selection, and character consistency management.",
+  "requestFramePermissions": []
+}
