@@ -1,5 +1,5 @@
 
-export type AspectRatio = '16:9' | '2.39:1' | '4:3' | '1:1';
+export type AspectRatio = '16:9' | '9:16' | '2.39:1' | '4:3' | '1:1';
 
 export type ShotType = 
   | 'Extreme Wide' 
@@ -73,6 +73,10 @@ export interface Shot {
   locationId: string;
   referenceShotId?: string; // ID of another shot to use as visual reference
   imageUrl?: string; // Base64
+  videoUrl?: string; // Base64 or Blob URL
+  videoPrompt?: string; // The specific prompt used/to-be-used for video generation
+  isVideoGenerating?: boolean;
+  videoModel?: 'fast' | 'quality';
   isGenerating: boolean;
   isEditing: boolean;
   isAltering?: boolean;

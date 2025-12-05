@@ -17,6 +17,16 @@ const getMimeType = (base64: string) => {
   return base64.match(/^data:(image\/\w+);base64,/)?.[1] || "image/jpeg";
 };
 
+// Helper to convert Blob to Base64
+const blobToBase64 = (blob: Blob): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result as string);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+};
+
 const getAI = () => new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 export interface ScriptBreakdownShot {
@@ -151,6 +161,7 @@ export const generateAssetImage = async (
 /**
  * Generates a cinematic storyboard image for a specific shot.
  * Uses gemini-3-pro-image-preview for Multimodal input support and strict consistency.
+ * FALLBACK: If multimodal fails (500 error), falls back to text-only description generation.
  */
 export const generateShotImage = async (
   shot: Shot,
@@ -166,50 +177,12 @@ export const generateShotImage = async (
   const activeLocation = allLocations.find(l => l.id === shot.locationId);
   const referenceShot = shot.referenceShotId ? allShots.find(s => s.id === shot.referenceShotId) : null;
 
-  // Build the prompt parts (Text + Images)
-  const parts: any[] = [];
-
-  // 0. Inject Scene Reference Shot (if available)
-  if (referenceShot && referenceShot.imageUrl) {
-    parts.push({
-      inlineData: {
-        mimeType: getMimeType(referenceShot.imageUrl),
-        data: stripBase64Header(referenceShot.imageUrl)
-      }
-    });
-    parts.push({ text: `REFERENCE_SCENE_CONTINUITY: Use this image (Shot #${referenceShot.number}) as the visual guide for the environment, lighting, and mood. The new shot must look like it belongs in the same sequence as this one.` });
-  }
-
-  // 1. Inject Character Reference Images
-  activeCharacters.forEach(char => {
-    if (char.imageUrl) {
-      parts.push({
-        inlineData: {
-          mimeType: getMimeType(char.imageUrl),
-          data: stripBase64Header(char.imageUrl)
-        }
-      });
-      parts.push({ text: `REFERENCE_IMAGE_CHARACTER: This is "${char.name}". Maintain this exact facial structure, hair, and costume.` });
-    }
-  });
-
-  // 2. Inject Location Reference Image
-  if (activeLocation && activeLocation.imageUrl) {
-    parts.push({
-      inlineData: {
-        mimeType: getMimeType(activeLocation.imageUrl),
-        data: stripBase64Header(activeLocation.imageUrl)
-      }
-    });
-    parts.push({ text: `REFERENCE_IMAGE_LOCATION: This is the location "${activeLocation.name}". Maintain this exact environment, lighting, and architecture.` });
-  }
-
-  // 3. Build Text Context for missing visuals
+  // Build Text Context for missing visuals or fallback
   let textContext = "CONTEXT:\n";
   activeCharacters.forEach(c => {
-    if (!c.imageUrl) textContext += `- Character "${c.name}": ${c.description}\n`;
+    textContext += `- Character "${c.name}": ${c.description}\n`;
   });
-  if (activeLocation && !activeLocation.imageUrl) {
+  if (activeLocation) {
     textContext += `- Location "${activeLocation.name}": ${activeLocation.description}\n`;
   }
 
@@ -223,8 +196,8 @@ export const generateShotImage = async (
       });
   }
 
-  // 4. Main Cinematic Prompt
-  const mainPrompt = `
+  // Main Cinematic Prompt
+  const mainPromptText = `
     TASK: Generate a high-fidelity cinematic movie keyframe.
     
     <technical_specs>
@@ -246,7 +219,6 @@ export const generateShotImage = async (
     </scene_action>
 
     <instructions>
-    - EXTREMELY IMPORTANT: You have been provided reference images for characters/locations above. You MUST use them as the ground truth.
     - Match the lighting direction, skin tones, and textures of the references.
     - If characters are interacting, ensure their relative scale is correct.
     - If dialogue is present, characters should have appropriate facial expressions (talking, shouting, whispering, listening).
@@ -254,16 +226,54 @@ export const generateShotImage = async (
     </instructions>
   `;
 
-  parts.push({ text: mainPrompt });
-
   // Map aspect ratio
-  // Supported by 3-pro: "1:1", "3:4", "4:3", "9:16", "16:9"
   let targetRatio = "16:9";
   if (settings.aspectRatio === '4:3') targetRatio = "4:3";
   if (settings.aspectRatio === '1:1') targetRatio = "1:1";
-  // 2.39:1 isn't directly supported, defaulting to 16:9
+  if (settings.aspectRatio === '9:16') targetRatio = "9:16";
 
+  // ATTEMPT 1: MULTIMODAL (Images + Text)
   try {
+    const parts: any[] = [];
+
+    // 0. Inject Scene Reference Shot
+    if (referenceShot && referenceShot.imageUrl) {
+      parts.push({
+        inlineData: {
+          mimeType: getMimeType(referenceShot.imageUrl),
+          data: stripBase64Header(referenceShot.imageUrl)
+        }
+      });
+      parts.push({ text: `REFERENCE_SCENE_CONTINUITY: Use this image (Shot #${referenceShot.number}) as the visual guide.` });
+    }
+
+    // 1. Inject Character Reference Images
+    activeCharacters.forEach(char => {
+      if (char.imageUrl) {
+        parts.push({
+          inlineData: {
+            mimeType: getMimeType(char.imageUrl),
+            data: stripBase64Header(char.imageUrl)
+          }
+        });
+        parts.push({ text: `REFERENCE_IMAGE_CHARACTER: This is "${char.name}". Maintain this exact facial structure and costume.` });
+      }
+    });
+
+    // 2. Inject Location Reference Image
+    if (activeLocation && activeLocation.imageUrl) {
+      parts.push({
+        inlineData: {
+          mimeType: getMimeType(activeLocation.imageUrl),
+          data: stripBase64Header(activeLocation.imageUrl)
+        }
+      });
+      parts.push({ text: `REFERENCE_IMAGE_LOCATION: This is the location "${activeLocation.name}". Maintain this environment.` });
+    }
+
+    // Add main prompt
+    parts.push({ text: mainPromptText });
+
     const response = await ai.models.generateContent({
       model: 'gemini-3-pro-image-preview',
       contents: { parts: parts },
@@ -275,7 +285,6 @@ export const generateShotImage = async (
       }
     });
 
-    // Extract image from response
     if (response.candidates && response.candidates.length > 0) {
       for (const part of response.candidates[0].content.parts) {
         if (part.inlineData) {
@@ -283,17 +292,50 @@ export const generateShotImage = async (
         }
       }
     }
-    
-    throw new Error("No image generated in response");
+    throw new Error("No multimodal image generated");
+
   } catch (error) {
-    console.error("Shot Gen Error:", error);
-    throw error;
+    console.warn("Multimodal generation failed, attempting text-only fallback...", error);
+    
+    // ATTEMPT 2: TEXT-ONLY FALLBACK
+    // This handles cases where 500 errors occur due to complexity or image processing limits
+    try {
+       const fallbackPrompt = `
+       ${mainPromptText}
+       
+       <visual_fallback_references>
+       ${textContext}
+       </visual_fallback_references>
+       `;
+
+       const response = await ai.models.generateContent({
+        model: 'gemini-3-pro-image-preview',
+        contents: { parts: [{ text: fallbackPrompt }] },
+        config: {
+          imageConfig: {
+              aspectRatio: targetRatio,
+              imageSize: '2K'
+          }
+        }
+      });
+
+      if (response.candidates && response.candidates.length > 0) {
+        for (const part of response.candidates[0].content.parts) {
+          if (part.inlineData) {
+            return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
+          }
+        }
+      }
+      throw new Error("No image generated in fallback");
+    } catch (fallbackError) {
+        console.error("Shot Gen Error (Final):", fallbackError);
+        throw fallbackError;
+    }
   }
 };
 
 /**
  * Alters an existing shot using the current image as a base reference.
- * "Alter" = Image-to-Image Generation (Current Image + Description -> New Image)
  */
 export const alterShotImage = async (
   shot: Shot,
@@ -333,7 +375,7 @@ export const alterShotImage = async (
     parts.push({ text: `REFERENCE_SCENE_CONTINUITY: Also consider this shot (Shot #${referenceShot.number}) for environmental consistency.` });
   }
 
-  // 3. Inject Asset References (to ensure consistency if details are regenerated)
+  // 3. Inject Asset References
   activeCharacters.forEach(char => {
     if (char.imageUrl) {
       parts.push({
@@ -379,9 +421,7 @@ export const alterShotImage = async (
        - If the user selected "High Angle", you MUST re-render the scene from above.
        - If the user selected "Low Angle", you MUST re-render from below.
        - If the user selected "Close Up" from a "Wide", crop and re-render the details.
-       - If the user selected "Rotate 45 degrees" (Dutch Angle), tilt the horizon.
-    2. **Consistency**: Maintain the identity of the characters and the details of the location from the reference images.
-    3. **Quality**: Enhance photorealism, lighting, and texture.
+    2. **Consistency**: Maintain the identity of the characters and the details of the location.
     </instructions>
   `;
 
@@ -390,6 +430,7 @@ export const alterShotImage = async (
   let targetRatio = "16:9";
   if (settings.aspectRatio === '4:3') targetRatio = "4:3";
   if (settings.aspectRatio === '1:1') targetRatio = "1:1";
+  if (settings.aspectRatio === '9:16') targetRatio = "9:16";
 
   try {
     const response = await ai.models.generateContent({
@@ -418,10 +459,6 @@ export const alterShotImage = async (
   }
 };
 
-/**
- * Edits an existing image (Shot, Character, or Location) using a text prompt.
- * Uses gemini-3-pro-image-preview for high-quality edits.
- */
 export const editImage = async (base64Image: string, prompt: string): Promise<string> => {
   const ai = getAI();
   const mimeType = getMimeType(base64Image);
@@ -461,4 +498,82 @@ export const editImage = async (base64Image: string, prompt: string): Promise<st
     console.error("Edit Image Error:", error);
     throw error;
   }
+};
+
+/**
+ * Generates a video for a shot using Veo 3.1.
+ */
+export const generateShotVideo = async (
+    shot: Shot, 
+    settings: CinematicSettings,
+    model: 'fast' | 'quality',
+    prompt: string
+): Promise<string> => {
+    const ai = getAI();
+    const modelName = model === 'fast' ? 'veo-3.1-fast-generate-preview' : 'veo-3.1-generate-preview';
+    
+    if (!shot.imageUrl) throw new Error("Visual reference required for video generation");
+
+    try {
+        console.log("Starting video generation with model:", modelName);
+        
+        let operation = await ai.models.generateVideos({
+            model: modelName,
+            prompt: prompt,
+            image: {
+                imageBytes: stripBase64Header(shot.imageUrl),
+                mimeType: getMimeType(shot.imageUrl),
+            },
+            config: {
+                numberOfVideos: 1,
+                resolution: model === 'quality' ? '1080p' : '720p',
+                aspectRatio: settings.aspectRatio === '9:16' ? '9:16' : '16:9' 
+            }
+        });
+
+        console.log("Video operation started:", operation.name);
+
+        // Polling loop
+        while (!operation.done) {
+            await new Promise(resolve => setTimeout(resolve, 10000)); // Poll every 10s (Veo takes time)
+            
+            // SDK-compliant polling
+            const updatedOp = await ai.operations.getVideosOperation({ operation: operation });
+            
+            // Preserve name if lost in update, crucial for next poll
+            if (!updatedOp.name && operation.name) {
+                (updatedOp as any).name = operation.name;
+            }
+            
+            operation = updatedOp;
+            console.log("Polling video operation...", operation);
+
+            if (operation.error) {
+                throw new Error(`Video Gen Error: ${operation.error.message || 'Unknown error'}`);
+            }
+        }
+
+        // Fetch the video URI. Check 'response' (standard) or 'result' (variant).
+        const videoUri = operation.response?.generatedVideos?.[0]?.video?.uri 
+                      || (operation as any).result?.generatedVideos?.[0]?.video?.uri;
+
+        if (!videoUri) {
+            console.error("Final Operation State:", JSON.stringify(operation, null, 2));
+            throw new Error("Video generation failed or returned no URI");
+        }
+
+        // Fetch the actual video bytes
+        // Use intelligent separator to avoid malformed URLs if videoUri already has params
+        const separator = videoUri.includes('?') ? '&' : '?';
+        const videoResponse = await fetch(`${videoUri}${separator}key=${process.env.API_KEY}`);
+        
+        if (!videoResponse.ok) throw new Error("Failed to download generated video");
+        
+        const blob = await videoResponse.blob();
+        return await blobToBase64(blob);
+
+    } catch (error: any) {
+        console.error("Video Gen Error:", error);
+        throw error;
+    }
 };

@@ -4,45 +4,44 @@ import { Project } from './types';
 import { DEFAULT_PROJECT_SETTINGS } from './constants';
 import { ProjectDashboard } from './components/ProjectDashboard';
 import { ProjectEditor } from './components/ProjectEditor';
+import { getAllProjectsFromDB, saveProjectToDB, deleteProjectFromDB } from './services/storage';
 
 export default function App() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
-  const [isLoaded, setIsLoaded] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
 
-  // Load from LocalStorage
+  // Load from IndexedDB
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem('slopboard_projects');
-      if (saved) {
-        setProjects(JSON.parse(saved));
-      } else {
-        // Init with default demo project if empty
-        const demoProject: Project = {
-            id: 'demo-1',
-            title: 'Untitled Sequence',
-            scriptContent: '',
-            settings: DEFAULT_PROJECT_SETTINGS,
-            characters: [],
-            locations: [],
-            shots: []
-        };
-        setProjects([demoProject]);
+    const loadData = async () => {
+      try {
+        const savedProjects = await getAllProjectsFromDB();
+        if (savedProjects && savedProjects.length > 0) {
+          setProjects(savedProjects);
+        } else {
+          // Init with default demo project if empty
+          const demoProject: Project = {
+              id: 'demo-1',
+              title: 'Untitled Sequence',
+              scriptContent: '',
+              settings: DEFAULT_PROJECT_SETTINGS,
+              characters: [],
+              locations: [],
+              shots: []
+          };
+          setProjects([demoProject]);
+          await saveProjectToDB(demoProject);
+        }
+      } catch (e) {
+        console.error("Failed to load projects", e);
+      } finally {
+        setIsLoading(false);
       }
-    } catch (e) {
-      console.error("Failed to load projects", e);
-    }
-    setIsLoaded(true);
+    };
+    loadData();
   }, []);
 
-  // Save to LocalStorage
-  useEffect(() => {
-    if (isLoaded) {
-        localStorage.setItem('slopboard_projects', JSON.stringify(projects));
-    }
-  }, [projects, isLoaded]);
-
-  const handleCreateProject = () => {
+  const handleCreateProject = async () => {
     const newProject: Project = {
         id: crypto.randomUUID(),
         title: 'New Project ' + (projects.length + 1),
@@ -54,16 +53,19 @@ export default function App() {
     };
     setProjects(prev => [...prev, newProject]);
     setActiveProjectId(newProject.id);
+    await saveProjectToDB(newProject);
   };
 
-  const handleDeleteProject = (id: string, e: React.MouseEvent) => {
+  const handleDeleteProject = async (id: string, e: React.MouseEvent) => {
       e.stopPropagation();
       setProjects(prev => prev.filter(p => p.id !== id));
       if (activeProjectId === id) setActiveProjectId(null);
+      await deleteProjectFromDB(id);
   };
 
-  const handleUpdateActiveProject = (updatedProject: Project) => {
+  const handleUpdateActiveProject = async (updatedProject: Project) => {
       setProjects(prev => prev.map(p => p.id === updatedProject.id ? updatedProject : p));
+      await saveProjectToDB(updatedProject);
   };
 
   if (!process.env.API_KEY) {
@@ -89,6 +91,10 @@ export default function App() {
               />
           );
       }
+  }
+
+  if (isLoading) {
+    return <div className="h-screen bg-neutral-950 flex items-center justify-center text-neutral-500">Loading Studio...</div>;
   }
 
   // Dashboard View

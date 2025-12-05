@@ -1,13 +1,14 @@
 
 import React, { useState, useEffect } from 'react';
-import { breakdownScript, generateShotImage, editImage, generateAssetImage, alterShotImage } from '../services/geminiService';
+import { breakdownScript, generateShotImage, editImage, generateAssetImage, alterShotImage, generateShotVideo } from '../services/geminiService';
 import { Project, Shot, CinematicSettings, Character, Location } from '../types';
 import { CINEMATOGRAPHERS, FILM_STOCKS, LENSES, LIGHTING_STYLES } from '../constants';
 import { ShotCard } from './ShotCard';
 import { AssetCard } from './AssetCard';
 import { Button } from './Button';
 import { ShotDetailModal } from './ShotDetailModal';
-import { Clapperboard, Settings, Users, MapPin, Film, ChevronRight, LayoutGrid, Plus, ChevronLeft, Home } from 'lucide-react';
+import { VideoShotCard } from './VideoShotCard';
+import { Clapperboard, Settings, Users, MapPin, Film, ChevronRight, LayoutGrid, Plus, ChevronLeft, Home, Video, Play, Loader2, Download, AlertCircle, ImageIcon, MonitorPlay } from 'lucide-react';
 
 interface ProjectEditorProps {
     initialProject: Project;
@@ -18,7 +19,7 @@ interface ProjectEditorProps {
 export const ProjectEditor: React.FC<ProjectEditorProps> = ({ initialProject, onSave, onBack }) => {
   // Initialize internal state with the passed project
   const [project, setProject] = useState<Project>(initialProject);
-  const [activeTab, setActiveTab] = useState<'script' | 'characters' | 'locations' | 'board'>('board');
+  const [activeTab, setActiveTab] = useState<'script' | 'characters' | 'locations' | 'board' | 'video'>('board');
   const [isBreakingDown, setIsBreakingDown] = useState(false);
   const [expandedShotId, setExpandedShotId] = useState<string | null>(null);
 
@@ -307,6 +308,84 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ initialProject, on
     }
   };
 
+  // --- Video Handlers ---
+
+  const synthesizeVideoPrompt = (shot: Shot) => {
+      let dialogueText = "";
+      if (shot.dialogueLines && shot.dialogueLines.length > 0) {
+          dialogueText = "\nDialogue:\n";
+          shot.dialogueLines.forEach(line => {
+              const speaker = project.characters.find(c => c.id === line.speakerId)?.name || "Unknown";
+              dialogueText += `${speaker}: "${line.text}"\n`;
+          });
+      }
+
+      return `Cinematic Shot.
+Action: ${shot.action}
+Description: ${shot.description}
+Camera Movement: ${shot.cameraMove}.
+Shot Type: ${shot.shotType}.
+Style: ${project.settings.cinematographer}, shot on ${project.settings.filmStock}.${dialogueText}`;
+  };
+
+  const handleGenerateVideo = async (shotId: string, model: 'fast' | 'quality') => {
+      const shot = project.shots.find(s => s.id === shotId);
+      if (!shot) return;
+
+      // 1. API Key Selection Check
+      if ((window as any).aistudio) {
+          try {
+              const hasKey = await (window as any).aistudio.hasSelectedApiKey();
+              if (!hasKey) {
+                  await (window as any).aistudio.openSelectKey();
+                  // Race condition mitigation: assume success and proceed.
+              }
+          } catch (e) {
+              console.error("API Key check failed", e);
+          }
+      }
+
+      setProject(prev => ({
+          ...prev,
+          shots: prev.shots.map(s => s.id === shotId ? { ...s, isVideoGenerating: true, videoModel: model } : s)
+      }));
+
+      try {
+          // Use the edited prompt if it exists, otherwise synthesize one
+          const promptToUse = shot.videoPrompt || synthesizeVideoPrompt(shot);
+
+          const videoUrl = await generateShotVideo(shot, project.settings, model, promptToUse);
+
+          setProject(prev => ({
+              ...prev,
+              shots: prev.shots.map(s => s.id === shotId ? { ...s, isVideoGenerating: false, videoUrl } : s)
+          }));
+      } catch (e: any) {
+          console.error(e);
+          setProject(prev => ({
+              ...prev,
+              shots: prev.shots.map(s => s.id === shotId ? { ...s, isVideoGenerating: false } : s)
+          }));
+          if (e.message?.includes("Requested entity was not found") && (window as any).aistudio) {
+              await (window as any).aistudio.openSelectKey();
+          }
+      }
+  };
+
+  const handleDownloadVideo = (shot: Shot) => {
+      if (!shot.videoUrl) return;
+      const link = document.createElement('a');
+      link.href = shot.videoUrl;
+      link.download = `shot-${shot.number}-video.mp4`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+  };
+
+  const handleUpdateVideoPrompt = (shotId: string, prompt: string) => {
+    updateShot(shotId, { videoPrompt: prompt });
+  };
+
   return (
     <div className="flex h-screen overflow-hidden bg-neutral-950 text-neutral-200 animate-fade-in">
       
@@ -388,6 +467,10 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ initialProject, on
             <button onClick={() => setActiveTab('locations')} className={`px-4 py-2 text-sm font-medium rounded-md transition-colors ${activeTab === 'locations' ? 'bg-neutral-800 text-white' : 'text-neutral-400 hover:text-white'}`}>Locations</button>
             <ChevronRight className="w-4 h-4 text-neutral-600" />
             <button onClick={() => setActiveTab('board')} className={`px-4 py-2 text-sm font-medium rounded-md transition-colors ${activeTab === 'board' ? 'bg-neutral-800 text-white' : 'text-neutral-400 hover:text-white'}`}>Storyboard</button>
+            <ChevronRight className="w-4 h-4 text-neutral-600" />
+            <button onClick={() => setActiveTab('video')} className={`px-4 py-2 text-sm font-medium rounded-md transition-colors flex items-center gap-2 ${activeTab === 'video' ? 'bg-red-900/20 text-red-500 border border-red-900/30' : 'text-neutral-400 hover:text-white'}`}>
+                <Video className="w-3 h-3" /> Video
+            </button>
           </div>
           <div className="flex items-center gap-4">
              {activeTab === 'board' && (
@@ -509,6 +592,37 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ initialProject, on
                         ))}
                     </div>
                  )}
+             </div>
+          )}
+
+          {activeTab === 'video' && (
+             <div className="animate-fade-in space-y-8 pb-20">
+                 <div className="bg-neutral-900 border border-neutral-800 p-6 rounded-lg mb-8">
+                     <h2 className="text-xl font-serif text-white flex items-center gap-2 mb-2">
+                         <Video className="w-5 h-5 text-red-500" /> Veo 3.1 Video Studio
+                     </h2>
+                     <p className="text-neutral-400 text-sm mb-4">
+                        Generate high-fidelity video clips. Review your prompts carefully before generation.
+                     </p>
+                     <div className="flex items-center gap-2 text-xs text-yellow-500 bg-yellow-900/10 p-2 rounded border border-yellow-900/30">
+                         <AlertCircle className="w-3 h-3" />
+                         <span>Models available: <strong>Veo 3.1 Fast</strong> (720p, faster) and <strong>Veo 3.1 Quality</strong> (1080p, slower).</span>
+                     </div>
+                 </div>
+
+                 <div className="flex flex-col gap-12">
+                    {project.shots.map(shot => (
+                        <VideoShotCard
+                            key={shot.id}
+                            shot={shot}
+                            videoModelLabel={`Veo ${shot.videoModel === 'quality' ? 'Quality' : 'Fast'} Model`}
+                            onUpdatePrompt={handleUpdateVideoPrompt}
+                            onGenerate={handleGenerateVideo}
+                            onDownload={handleDownloadVideo}
+                            synthesizePrompt={synthesizeVideoPrompt}
+                        />
+                    ))}
+                 </div>
              </div>
           )}
         </div>
