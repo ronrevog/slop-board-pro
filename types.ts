@@ -1,12 +1,12 @@
 
 export type AspectRatio = '16:9' | '9:16' | '2.39:1' | '4:3' | '1:1';
 
-export type ShotType = 
-  | 'Extreme Wide' 
-  | 'Wide' 
-  | 'Medium' 
-  | 'Close Up' 
-  | 'Extreme Close Up' 
+export type ShotType =
+  | 'Extreme Wide'
+  | 'Wide'
+  | 'Medium'
+  | 'Close Up'
+  | 'Extreme Close Up'
   | 'Insert'
   | 'High Angle'
   | 'Low Angle'
@@ -14,14 +14,14 @@ export type ShotType =
   | 'Overhead'
   | 'Over the Shoulder';
 
-export type CameraMove = 
-  | 'Static' 
-  | 'Dolly In' 
-  | 'Dolly Out' 
-  | 'Pan' 
-  | 'Tilt' 
-  | 'Handheld' 
-  | 'Tracking' 
+export type CameraMove =
+  | 'Static'
+  | 'Dolly In'
+  | 'Dolly Out'
+  | 'Pan'
+  | 'Tilt'
+  | 'Handheld'
+  | 'Tracking'
   | 'Crane'
   | 'Arc'
   | 'Zoom In'
@@ -61,6 +61,14 @@ export interface DialogueLine {
   text: string;
 }
 
+export interface VideoSegment {
+  id: string;
+  url: string;
+  timestamp: number;
+  model: 'fast' | 'quality';
+  isExtension: boolean; // true if this segment was created by extending
+}
+
 export interface Shot {
   id: string;
   number: number;
@@ -74,8 +82,11 @@ export interface Shot {
   referenceShotId?: string; // ID of another shot to use as visual reference
   imageUrl?: string; // Base64
   videoUrl?: string; // Base64 or Blob URL
+  videoSegments?: VideoSegment[]; // Array of video segments in order (for stringout)
   videoPrompt?: string; // The specific prompt used/to-be-used for video generation
+  videoError?: string; // Error message from video generation (e.g. content policy)
   isVideoGenerating?: boolean;
+  isExtending?: boolean;
   videoModel?: 'fast' | 'quality';
   isGenerating: boolean;
   isEditing: boolean;
@@ -83,12 +94,22 @@ export interface Shot {
   notes?: string;
 }
 
+export interface Scene {
+  id: string;
+  name: string;
+  description?: string;
+  scriptContent: string; // Each scene has its own script content
+  shots: Shot[];
+  order: number; // For ordering scenes in the project
+}
+
 export interface Project {
   id: string;
   title: string;
-  scriptContent: string;
+  scriptContent: string; // Legacy - can be used for overall script or removed
   settings: CinematicSettings;
-  characters: Character[];
-  locations: Location[];
-  shots: Shot[];
+  characters: Character[]; // Shared across all scenes
+  locations: Location[]; // Shared across all scenes
+  scenes: Scene[]; // Multiple scenes per project
+  shots: Shot[]; // Legacy - for backward compatibility
 }

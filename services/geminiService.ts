@@ -1,6 +1,7 @@
 
 import { GoogleGenAI } from "@google/genai";
 import { CinematicSettings, Character, Location, Shot } from "../types";
+import { ANAMORPHIC_LENS_PROMPTS } from "../constants";
 
 // Helper to sanitize JSON strings
 const cleanJson = (text: string) => {
@@ -27,7 +28,56 @@ const blobToBase64 = (blob: Blob): Promise<string> => {
   });
 };
 
-const getAI = () => new GoogleGenAI({ apiKey: process.env.API_KEY });
+// Helper to extract last frame from a video URL (Blob or Base64)
+const getLastFrameFromVideo = (videoUrl: string): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const video = document.createElement('video');
+    video.src = videoUrl;
+    video.crossOrigin = "anonymous";
+    video.muted = true;
+
+    // Safety timeout
+    const timeout = setTimeout(() => reject(new Error("Video frame extraction timed out")), 5000);
+
+    video.onloadeddata = () => {
+      // Seek to the very end
+      video.currentTime = Math.max(0, video.duration - 0.1);
+    };
+
+    video.onseeked = () => {
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) throw new Error("No canvas context");
+
+        ctx.drawImage(video, 0, 0);
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
+
+        clearTimeout(timeout);
+        // Clean up
+        video.src = "";
+        video.load();
+
+        resolve(dataUrl);
+      } catch (e) {
+        reject(e);
+      }
+    };
+
+    video.onerror = (e) => {
+      clearTimeout(timeout);
+      reject(new Error("Video load failed during frame extraction"));
+    };
+  });
+};
+
+const getApiKey = () => {
+  return process.env.API_KEY || localStorage.getItem('gemini_api_key') || "";
+};
+
+const getAI = () => new GoogleGenAI({ apiKey: getApiKey() });
 
 export interface ScriptBreakdownShot {
   description: string;
@@ -38,16 +88,132 @@ export interface ScriptBreakdownShot {
   speaker?: string;
 }
 
+export interface ExtractedCharacter {
+  name: string;
+  description: string;
+}
+
+export interface ExtractedLocation {
+  name: string;
+  description: string;
+}
+
+export interface ScriptAnalysisResult {
+  shots: ScriptBreakdownShot[];
+  characters: ExtractedCharacter[];
+  locations: ExtractedLocation[];
+}
+
 /**
- * Analyzes the raw script and breaks it down into a shot list.
+ * Comprehensive script analysis that extracts characters, locations, and shot breakdown.
  * Uses gemini-3-pro-preview for complex reasoning.
+ */
+export const analyzeScript = async (
+  scriptText: string,
+  settings: CinematicSettings
+): Promise<ScriptAnalysisResult> => {
+  const ai = getAI();
+
+  const prompt = `
+  <role>
+  You are an award-winning script supervisor + casting director + location scout + cinematographer.
+  Your job: Analyze the provided SCRIPT and extract ALL characters, locations, and break it down into a cinematic shot list.
+  </role>
+
+  <input_script>
+  ${scriptText}
+  </input_script>
+
+  <cinematic_style>
+  - Director of Photography Style: ${settings.cinematographer}
+  - Film Stock: ${settings.filmStock}
+  - Lenses: ${settings.lens}
+  - Lighting: ${settings.lighting}
+  </cinematic_style>
+
+  <extraction_rules>
+  1. **CHARACTERS**: Extract EVERY character mentioned, named, or implied. Include:
+     - Name (use descriptive names like "Old Man" or "Guard #1" if no name given)
+     - Detailed physical description: age, gender, build, hair, clothing/costume, distinguishing features
+     - Role in the story and personality traits if apparent
+  
+  2. **LOCATIONS**: Extract EVERY unique location/setting. Include:
+     - Name (e.g. "Downtown Alley", "Sarah's Apartment", "Police Station Lobby")
+     - Detailed environmental description: time of day, weather, architecture, lighting conditions, mood, key props/furniture
+  
+  3. **SHOTS**: Create a cinematic shot breakdown:
+     - 5-15 shots that tell the story visually
+     - Strict continuity across ALL shots
+     - Include character names and locations in descriptions
+  </extraction_rules>
+
+  <output_format>
+  Return ONLY a valid JSON object with this exact schema:
+  {
+    "characters": [
+      {
+        "name": "Character Name",
+        "description": "Detailed physical description including age, appearance, clothing, personality traits"
+      }
+    ],
+    "locations": [
+      {
+        "name": "Location Name",
+        "description": "Detailed environment description including time of day, atmosphere, architecture, key features"
+      }
+    ],
+    "shots": [
+      {
+        "description": "Detailed visual description of composition, foreground/background, lighting, depth",
+        "shotType": "Extreme Wide | Wide | Medium | Close Up | Extreme Close Up | Insert | High Angle | Low Angle | Dutch Angle (45°)",
+        "cameraMove": "Static | Dolly In | Dolly Out | Pan | Tilt | Handheld | Tracking | Crane | Arc",
+        "action": "What visibly happens in the frame",
+        "dialogue": "Spoken line (optional, empty string if none)",
+        "speaker": "Speaker name (optional, empty string if none)"
+      }
+    ]
+  }
+  </output_format>
+  `;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-3-pro-preview',
+      contents: prompt,
+      config: {
+        responseMimeType: 'application/json',
+        temperature: 0.7,
+      }
+    });
+
+    const text = response.text;
+    if (!text) throw new Error("No response from AI");
+
+    const result = JSON.parse(cleanJson(text));
+
+    // Ensure proper structure
+    return {
+      characters: result.characters || [],
+      locations: result.locations || [],
+      shots: result.shots || []
+    };
+  } catch (error) {
+    console.error("Script Analysis Error:", error);
+    throw error;
+  }
+};
+
+/**
+ * Analyzes the raw script and breaks it down into a shot list only.
+ * Uses gemini-3-pro-preview for complex reasoning.
+ * @deprecated Use analyzeScript for comprehensive extraction
  */
 export const breakdownScript = async (
   scriptText: string,
   settings: CinematicSettings
 ): Promise<ScriptBreakdownShot[]> => {
   const ai = getAI();
-  
+
   const prompt = `
   <role>
   You are an award-winning trailer director + cinematographer + storyboard artist.
@@ -107,7 +273,7 @@ export const breakdownScript = async (
 
     const text = response.text;
     if (!text) throw new Error("No response from AI");
-    
+
     return JSON.parse(cleanJson(text));
   } catch (error) {
     console.error("Script Breakdown Error:", error);
@@ -120,43 +286,43 @@ export const breakdownScript = async (
  * Uses gemini-3-pro-image-preview for maximum quality.
  */
 export const generateAssetImage = async (
-    type: 'Character' | 'Location',
-    name: string,
-    description: string,
-    settings: CinematicSettings
-  ): Promise<string> => {
-    const ai = getAI();
-  
-    const prompt = type === 'Character' 
-      ? `Full body character design sheet, cinematic lighting. Character: ${name}. Description: ${description}. Style: Photorealistic, shot on ${settings.filmStock}, ${settings.lighting} lighting.`
-      : `Cinematic wide shot of location. Location: ${name}. Description: ${description}. Style: Photorealistic, shot on ${settings.filmStock}, ${settings.cinematographer} style.`;
-  
-    try {
-      const response = await ai.models.generateContent({
-        model: 'gemini-3-pro-image-preview',
-        contents: { parts: [{ text: prompt }] },
-        config: {
-          imageConfig: {
-              aspectRatio: '1:1',
-              imageSize: '2K'
-          }
-        }
-      });
-  
-      if (response.candidates && response.candidates.length > 0) {
-        for (const part of response.candidates[0].content.parts) {
-          if (part.inlineData) {
-            return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
-          }
+  type: 'Character' | 'Location',
+  name: string,
+  description: string,
+  settings: CinematicSettings
+): Promise<string> => {
+  const ai = getAI();
+
+  const prompt = type === 'Character'
+    ? `Full body character design sheet, cinematic lighting. Character: ${name}. Description: ${description}. Style: Photorealistic, shot on ${settings.filmStock}, ${settings.lighting} lighting.`
+    : `Cinematic wide shot of location. Location: ${name}. Description: ${description}. Style: Photorealistic, shot on ${settings.filmStock}, ${settings.cinematographer} style.`;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-3-pro-image-preview',
+      contents: { parts: [{ text: prompt }] },
+      config: {
+        imageConfig: {
+          aspectRatio: '1:1',
+          imageSize: '2K'
         }
       }
-      
-      throw new Error("No image generated");
-    } catch (error) {
-      console.error("Asset Gen Error:", error);
-      throw error;
+    });
+
+    if (response.candidates && response.candidates.length > 0) {
+      for (const part of response.candidates[0].content.parts) {
+        if (part.inlineData) {
+          return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
+        }
+      }
     }
-  };
+
+    throw new Error("No image generated");
+  } catch (error) {
+    console.error("Asset Gen Error:", error);
+    throw error;
+  }
+};
 
 /**
  * Generates a cinematic storyboard image for a specific shot.
@@ -189,11 +355,33 @@ export const generateShotImage = async (
   // Build Dialogue Context for facial expressions/mouth shape
   let dialogueContext = "";
   if (shot.dialogueLines && shot.dialogueLines.length > 0) {
-      dialogueContext = "\nDIALOGUE (Characters may be speaking/reacting):\n";
-      shot.dialogueLines.forEach(line => {
-         const speakerName = allCharacters.find(c => c.id === line.speakerId)?.name || "Unknown";
-         dialogueContext += `- ${speakerName}: "${line.text}"\n`;
-      });
+    dialogueContext = "\nDIALOGUE (Characters may be speaking/reacting):\n";
+    shot.dialogueLines.forEach(line => {
+      const speakerName = allCharacters.find(c => c.id === line.speakerId)?.name || "Unknown";
+      dialogueContext += `- ${speakerName}: "${line.text}"\n`;
+    });
+  }
+
+  // Check if using Panavision C-Series Anamorphic lens
+  const isAnamorphicLens = settings.lens.startsWith("Panavision C-Series");
+  const anamorphicPrompt = isAnamorphicLens ? ANAMORPHIC_LENS_PROMPTS[settings.lens] : null;
+
+  // Build anamorphic-specific instructions if applicable
+  let anamorphicInstructions = "";
+  if (anamorphicPrompt) {
+    anamorphicInstructions = `
+    <ANAMORPHIC_LENS_PHYSICS>
+    This shot uses a Panavision C-Series Anamorphic lens. Apply authentic anamorphic characteristics:
+    
+    ${anamorphicPrompt}
+    
+    Key anamorphic traits to include:
+    - Oval/vertical bokeh ellipses in out-of-focus areas
+    - Characteristic blue horizontal lens flares where light sources are present
+    - Subtle barrel distortion on wide lenses
+    - Classic cinematic anamorphic look
+    </ANAMORPHIC_LENS_PHYSICS>
+    `;
   }
 
   // Main Cinematic Prompt
@@ -209,7 +397,7 @@ export const generateShotImage = async (
     - Camera Move: ${shot.cameraMove}
     - Aspect Ratio: ${settings.aspectRatio}
     </technical_specs>
-
+    ${anamorphicInstructions}
     ${textContext}
     ${dialogueContext}
 
@@ -223,6 +411,7 @@ export const generateShotImage = async (
     - If characters are interacting, ensure their relative scale is correct.
     - If dialogue is present, characters should have appropriate facial expressions (talking, shouting, whispering, listening).
     - Render with "Masterpiece" quality: 8k resolution, professional color grading, realistic textures, volumetric lighting.
+    ${isAnamorphicLens ? '- Apply classic anamorphic lens characteristics: oval bokeh, blue horizontal flares, and cinematic depth.' : ''}
     </instructions>
   `;
 
@@ -279,8 +468,8 @@ export const generateShotImage = async (
       contents: { parts: parts },
       config: {
         imageConfig: {
-            aspectRatio: targetRatio,
-            imageSize: '2K'
+          aspectRatio: targetRatio,
+          imageSize: '2K'
         }
       }
     });
@@ -296,11 +485,11 @@ export const generateShotImage = async (
 
   } catch (error) {
     console.warn("Multimodal generation failed, attempting text-only fallback...", error);
-    
+
     // ATTEMPT 2: TEXT-ONLY FALLBACK
     // This handles cases where 500 errors occur due to complexity or image processing limits
     try {
-       const fallbackPrompt = `
+      const fallbackPrompt = `
        ${mainPromptText}
        
        <visual_fallback_references>
@@ -308,13 +497,13 @@ export const generateShotImage = async (
        </visual_fallback_references>
        `;
 
-       const response = await ai.models.generateContent({
+      const response = await ai.models.generateContent({
         model: 'gemini-3-pro-image-preview',
         contents: { parts: [{ text: fallbackPrompt }] },
         config: {
           imageConfig: {
-              aspectRatio: targetRatio,
-              imageSize: '2K'
+            aspectRatio: targetRatio,
+            imageSize: '2K'
           }
         }
       });
@@ -328,8 +517,8 @@ export const generateShotImage = async (
       }
       throw new Error("No image generated in fallback");
     } catch (fallbackError) {
-        console.error("Shot Gen Error (Final):", fallbackError);
-        throw fallbackError;
+      console.error("Shot Gen Error (Final):", fallbackError);
+      throw fallbackError;
     }
   }
 };
@@ -398,6 +587,27 @@ export const alterShotImage = async (
     parts.push({ text: `REFERENCE_LOCATION: "${activeLocation.name}".` });
   }
 
+  // Check if using Panavision C-Series Anamorphic lens
+  const isAnamorphicLens = settings.lens.startsWith("Panavision C-Series");
+  const anamorphicPrompt = isAnamorphicLens ? ANAMORPHIC_LENS_PROMPTS[settings.lens] : null;
+
+  // Build anamorphic-specific instructions if applicable
+  let anamorphicInstructions = "";
+  if (anamorphicPrompt) {
+    anamorphicInstructions = `
+    <ANAMORPHIC_LENS_PHYSICS>
+    This shot uses a Panavision C-Series Anamorphic lens. Apply authentic anamorphic characteristics:
+    
+    ${anamorphicPrompt}
+    
+    Key anamorphic traits to include:
+    - Oval/vertical bokeh ellipses in out-of-focus areas
+    - Characteristic blue horizontal lens flares where light sources are present
+    - Classic cinematic anamorphic look
+    </ANAMORPHIC_LENS_PHYSICS>
+    `;
+  }
+
   // 4. Main Prompt with override instructions
   const mainPrompt = `
     TASK: Alter and refine the provided start image.
@@ -409,8 +619,9 @@ export const alterShotImage = async (
     - Film Stock: ${settings.filmStock}
     - Lens: ${settings.lens}
     - Lighting: ${settings.lighting}
+    - Aspect Ratio: ${settings.aspectRatio}
     </TARGET_TECHNICAL_SPECS>
-
+    ${anamorphicInstructions}
     <scene_description>
     Action: ${shot.action}
     Visual Description: ${shot.description}
@@ -422,11 +633,13 @@ export const alterShotImage = async (
        - If the user selected "Low Angle", you MUST re-render from below.
        - If the user selected "Close Up" from a "Wide", crop and re-render the details.
     2. **Consistency**: Maintain the identity of the characters and the details of the location.
+    ${isAnamorphicLens ? '3. **Anamorphic**: Apply classic anamorphic lens characteristics: oval bokeh, blue horizontal flares, and cinematic depth.' : ''}
     </instructions>
   `;
 
   parts.push({ text: mainPrompt });
 
+  // Map aspect ratio
   let targetRatio = "16:9";
   if (settings.aspectRatio === '4:3') targetRatio = "4:3";
   if (settings.aspectRatio === '1:1') targetRatio = "1:1";
@@ -438,8 +651,8 @@ export const alterShotImage = async (
       contents: { parts: parts },
       config: {
         imageConfig: {
-            aspectRatio: targetRatio,
-            imageSize: '2K'
+          aspectRatio: targetRatio,
+          imageSize: '2K'
         }
       }
     });
@@ -451,7 +664,7 @@ export const alterShotImage = async (
         }
       }
     }
-    
+
     throw new Error("No image generated in response");
   } catch (error) {
     console.error("Alter Shot Error:", error);
@@ -480,7 +693,7 @@ export const editImage = async (base64Image: string, prompt: string): Promise<st
       },
       config: {
         imageConfig: {
-            imageSize: '2K'
+          imageSize: '2K'
         }
       }
     });
@@ -492,7 +705,7 @@ export const editImage = async (base64Image: string, prompt: string): Promise<st
         }
       }
     }
-    
+
     throw new Error("No image generated from edit");
   } catch (error) {
     console.error("Edit Image Error:", error);
@@ -504,76 +717,182 @@ export const editImage = async (base64Image: string, prompt: string): Promise<st
  * Generates a video for a shot using Veo 3.1.
  */
 export const generateShotVideo = async (
-    shot: Shot, 
-    settings: CinematicSettings,
-    model: 'fast' | 'quality',
-    prompt: string
+  shot: Shot,
+  settings: CinematicSettings,
+  model: 'fast' | 'quality',
+  prompt: string
 ): Promise<string> => {
-    const ai = getAI();
-    const modelName = model === 'fast' ? 'veo-3.1-fast-generate-preview' : 'veo-3.1-generate-preview';
-    
-    if (!shot.imageUrl) throw new Error("Visual reference required for video generation");
+  const ai = getAI();
+  const modelName = model === 'fast' ? 'veo-3.1-fast-generate-preview' : 'veo-3.1-generate-preview';
+
+  if (!shot.imageUrl) throw new Error("Visual reference required for video generation");
+
+  try {
+    console.log("Starting video generation with model:", modelName);
+
+    const inputs: any = {
+      model: modelName,
+      prompt: prompt,
+      config: {
+        numberOfVideos: 1,
+        resolution: model === 'quality' ? '1080p' : '720p',
+        aspectRatio: settings.aspectRatio === '9:16' ? '9:16' : '16:9'
+      }
+    };
+
+    // If both start and end frames are present -> Image-to-Video with Control
+    // Note: This relies on the API supporting 'end_image' or multiple images logic.
+    // Based on user request "last frame first frame", we ensure we pass appropriate image context.
+
+    // Standard Image-to-Video
+    inputs.image = {
+      imageBytes: stripBase64Header(shot.imageUrl),
+      mimeType: getMimeType(shot.imageUrl),
+    };
+
+    let operation = await ai.models.generateVideos(inputs);
+
+    console.log("Video operation started:", operation.name);
+
+    // Polling loop
+    while (!operation.done) {
+      await new Promise(resolve => setTimeout(resolve, 10000)); // Poll every 10s (Veo takes time)
+
+      // SDK-compliant polling
+      const updatedOp = await ai.operations.getVideosOperation({ operation: operation });
+
+      // Preserve name if lost in update, crucial for next poll
+      if (!updatedOp.name && operation.name) {
+        (updatedOp as any).name = operation.name;
+      }
+
+      operation = updatedOp;
+      console.log("Polling video operation...", operation);
+
+      if (operation.error) {
+        throw new Error(`Video Gen Error: ${operation.error.message || 'Unknown error'}`);
+      }
+    }
+
+    // Check for RAI (Responsible AI) content filtering
+    const raiReasons = operation.response?.raiMediaFilteredReasons
+      || (operation as any).result?.raiMediaFilteredReasons;
+
+    if (raiReasons && raiReasons.length > 0) {
+      console.error("Video blocked by content policy:", raiReasons);
+      throw new Error(`Content Policy: ${raiReasons[0]}`);
+    }
+
+    // Fetch the video URI. Check 'response' (standard) or 'result' (variant).
+    const videoUri = operation.response?.generatedVideos?.[0]?.video?.uri
+      || (operation as any).result?.generatedVideos?.[0]?.video?.uri;
+
+    if (!videoUri) {
+      console.error("Final Operation State:", JSON.stringify(operation, null, 2));
+      throw new Error("Video generation failed - no video returned. Try regenerating the source image.");
+    }
+
+    // Fetch the actual video bytes
+    // Use intelligent separator to avoid malformed URLs if videoUri already has params
+    const separator = videoUri.includes('?') ? '&' : '?';
+    const finalVideoUrl = `${videoUri}${separator}key=${getApiKey()}`;
 
     try {
-        console.log("Starting video generation with model:", modelName);
-        
-        let operation = await ai.models.generateVideos({
-            model: modelName,
-            prompt: prompt,
-            image: {
-                imageBytes: stripBase64Header(shot.imageUrl),
-                mimeType: getMimeType(shot.imageUrl),
-            },
-            config: {
-                numberOfVideos: 1,
-                resolution: model === 'quality' ? '1080p' : '720p',
-                aspectRatio: settings.aspectRatio === '9:16' ? '9:16' : '16:9' 
-            }
-        });
+      const videoResponse = await fetch(finalVideoUrl);
+      if (!videoResponse.ok) throw new Error("Failed to download generated video");
 
-        console.log("Video operation started:", operation.name);
-
-        // Polling loop
-        while (!operation.done) {
-            await new Promise(resolve => setTimeout(resolve, 10000)); // Poll every 10s (Veo takes time)
-            
-            // SDK-compliant polling
-            const updatedOp = await ai.operations.getVideosOperation({ operation: operation });
-            
-            // Preserve name if lost in update, crucial for next poll
-            if (!updatedOp.name && operation.name) {
-                (updatedOp as any).name = operation.name;
-            }
-            
-            operation = updatedOp;
-            console.log("Polling video operation...", operation);
-
-            if (operation.error) {
-                throw new Error(`Video Gen Error: ${operation.error.message || 'Unknown error'}`);
-            }
-        }
-
-        // Fetch the video URI. Check 'response' (standard) or 'result' (variant).
-        const videoUri = operation.response?.generatedVideos?.[0]?.video?.uri 
-                      || (operation as any).result?.generatedVideos?.[0]?.video?.uri;
-
-        if (!videoUri) {
-            console.error("Final Operation State:", JSON.stringify(operation, null, 2));
-            throw new Error("Video generation failed or returned no URI");
-        }
-
-        // Fetch the actual video bytes
-        // Use intelligent separator to avoid malformed URLs if videoUri already has params
-        const separator = videoUri.includes('?') ? '&' : '?';
-        const videoResponse = await fetch(`${videoUri}${separator}key=${process.env.API_KEY}`);
-        
-        if (!videoResponse.ok) throw new Error("Failed to download generated video");
-        
-        const blob = await videoResponse.blob();
-        return await blobToBase64(blob);
-
-    } catch (error: any) {
-        console.error("Video Gen Error:", error);
-        throw error;
+      const blob = await videoResponse.blob();
+      return await blobToBase64(blob);
+    } catch (fetchError) {
+      console.warn("Could not fetch video blob (likely CORS). Falling back to direct URL.", fetchError);
+      return finalVideoUrl;
     }
+
+  } catch (error: any) {
+    console.error("Video Gen Error:", error);
+    throw error;
+  }
+};
+
+/**
+ * Extends an existing video.
+ */
+export const extendShotVideo = async (
+  shot: Shot,
+  settings: CinematicSettings,
+  model: 'fast' | 'quality',
+  prompt: string,
+  videoBase64: string
+): Promise<string> => {
+  const ai = getAI();
+  const modelName = model === 'fast' ? 'veo-3.1-fast-generate-preview' : 'veo-3.1-generate-preview';
+
+  try {
+    console.log("Starting video extension with model:", modelName);
+
+    // Extract the last frame to use as the start frame for the extension
+    // This implements the "Last Frame First Frame" logic which is the core of video extension
+    // when direct video input is not supported or optimal.
+    const lastFrameBase64 = await getLastFrameFromVideo(videoBase64);
+
+    // Use the last frame as the input image
+    const inputs: any = {
+      model: modelName,
+      prompt: `(Continue this action seamlessly) ${prompt}`,
+      image: {
+        imageBytes: stripBase64Header(lastFrameBase64),
+        mimeType: 'image/jpeg',
+      },
+      config: {
+        numberOfVideos: 1,
+        resolution: model === 'quality' ? '1080p' : '720p',
+        aspectRatio: settings.aspectRatio === '9:16' ? '9:16' : '16:9'
+      }
+    };
+
+    let operation = await ai.models.generateVideos(inputs);
+    console.log("Extension operation started:", operation.name);
+
+    // Polling loop
+    while (!operation.done) {
+      await new Promise(resolve => setTimeout(resolve, 10000));
+      const updatedOp = await ai.operations.getVideosOperation({ operation: operation });
+      if (!updatedOp.name && operation.name) (updatedOp as any).name = operation.name;
+      operation = updatedOp;
+      console.log("Polling extension operation...", operation);
+
+      if (operation.error) throw new Error(`Extension Error: ${operation.error.message || 'Unknown error'}`);
+    }
+
+    // Check for RAI (Responsible AI) content filtering
+    const raiReasons = operation.response?.raiMediaFilteredReasons
+      || (operation as any).result?.raiMediaFilteredReasons;
+
+    if (raiReasons && raiReasons.length > 0) {
+      console.error("Video extension blocked by content policy:", raiReasons);
+      throw new Error(`Content Policy: ${raiReasons[0]}`);
+    }
+
+    const videoUri = operation.response?.generatedVideos?.[0]?.video?.uri
+      || (operation as any).result?.generatedVideos?.[0]?.video?.uri;
+
+    if (!videoUri) throw new Error("Video extension failed - no video returned. Try regenerating the source video.");
+
+    const separator = videoUri.includes('?') ? '&' : '?';
+    const finalVideoUrl = `${videoUri}${separator}key=${getApiKey()}`;
+
+    try {
+      const videoResponse = await fetch(finalVideoUrl);
+      if (!videoResponse.ok) throw new Error("Failed to download extended video");
+      const blob = await videoResponse.blob();
+      return await blobToBase64(blob);
+    } catch (fetchError) {
+      console.warn("Could not fetch extended video blob. Falling back to URL.", fetchError);
+      return finalVideoUrl;
+    }
+
+  } catch (error: any) {
+    console.error("Video Extension Error:", error);
+    throw error;
+  }
 };
