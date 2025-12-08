@@ -183,10 +183,15 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {projects.map(project => {
+              // Collect all shots from both legacy shots array and scenes
+              const allShots = [
+                ...(project.shots || []),
+                ...(project.scenes || []).flatMap(scene => scene.shots || [])
+              ];
               // Use custom cover image, otherwise fall back to first shot with an image
-              const coverShot = project.shots.find(s => s.imageUrl);
+              const coverShot = allShots.find(s => s.imageUrl);
               const displayImage = project.coverImageUrl || coverShot?.imageUrl;
-              const shotCount = project.shots.length;
+              const shotCount = allShots.length;
               const charCount = project.characters.length;
               const locCount = project.locations.length;
 

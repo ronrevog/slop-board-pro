@@ -80,10 +80,10 @@ export const AssetCard: React.FC<AssetCardProps> = ({
   const locationItem = type === 'Location' ? (item as Location) : null;
 
   return (
-    <div className={`bg-neutral-900 border border-neutral-800 rounded-lg overflow-hidden hover:border-neutral-600 transition-all shadow-sm ${isExpanded ? '' : 'flex flex-row h-52'}`}>
+    <div className="bg-neutral-900 border border-neutral-800 rounded-lg overflow-hidden hover:border-neutral-600 transition-all shadow-sm flex flex-col">
 
       {/* Main Row */}
-      <div className={`flex flex-row ${isExpanded ? 'h-52' : 'h-full'}`}>
+      <div className="flex flex-row h-52">
         {/* Image Area - Fixed Width */}
         <div className="relative w-52 bg-black flex-shrink-0 border-r border-neutral-800 group h-full">
 
