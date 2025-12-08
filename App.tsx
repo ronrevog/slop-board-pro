@@ -148,6 +148,7 @@ export default function App() {
       onSelect={setActiveProjectId}
       onDelete={handleDeleteProject}
       onRefresh={handleRefreshProjects}
+      onUpdateProject={handleUpdateActiveProject}
     />
   );
 }

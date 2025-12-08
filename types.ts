@@ -126,4 +126,5 @@ export interface Project {
   locations: Location[]; // Shared across all scenes
   scenes: Scene[]; // Multiple scenes per project
   shots: Shot[]; // Legacy - for backward compatibility
+  coverImageUrl?: string; // Custom cover image for project dashboard
 }

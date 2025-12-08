@@ -1,7 +1,7 @@
 
 import React, { useRef, useState } from 'react';
 import { Project } from '../types';
-import { Plus, Film, Trash2, Calendar, Clapperboard, LayoutGrid, Download, Upload, CheckCircle, AlertCircle } from 'lucide-react';
+import { Plus, Film, Trash2, Calendar, Clapperboard, LayoutGrid, Download, Upload, CheckCircle, AlertCircle, ImagePlus } from 'lucide-react';
 import { Button } from './Button';
 import { exportProjectsToFile, importProjectsFromFile, exportSingleProjectToFile } from '../services/storage';
 
@@ -11,6 +11,7 @@ interface ProjectDashboardProps {
   onSelect: (id: string) => void;
   onDelete: (id: string, e: React.MouseEvent) => void;
   onRefresh: () => void;
+  onUpdateProject: (project: Project) => void;
 }
 
 export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
@@ -18,9 +19,12 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
   onCreate,
   onSelect,
   onDelete,
-  onRefresh
+  onRefresh,
+  onUpdateProject
 }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const coverInputRef = useRef<HTMLInputElement>(null);
+  const [uploadingCoverForProjectId, setUploadingCoverForProjectId] = useState<string | null>(null);
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   const showNotification = (type: 'success' | 'error', message: string) => {
@@ -61,6 +65,40 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
     }
   };
 
+  const handleCoverUploadClick = (e: React.MouseEvent, projectId: string) => {
+    e.stopPropagation();
+    setUploadingCoverForProjectId(projectId);
+    coverInputRef.current?.click();
+  };
+
+  const handleCoverFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !uploadingCoverForProjectId) return;
+
+    const project = projects.find(p => p.id === uploadingCoverForProjectId);
+    if (!project) return;
+
+    try {
+      // Convert to base64
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const base64 = reader.result as string;
+        onUpdateProject({ ...project, coverImageUrl: base64 });
+        showNotification('success', 'Cover image updated!');
+      };
+      reader.readAsDataURL(file);
+    } catch (err) {
+      showNotification('error', 'Failed to upload cover image');
+      console.error(err);
+    }
+
+    // Reset
+    setUploadingCoverForProjectId(null);
+    if (coverInputRef.current) {
+      coverInputRef.current.value = '';
+    }
+  };
+
   return (
     <div className="min-h-screen bg-neutral-950 text-neutral-200 p-8 md:p-12 overflow-y-auto custom-scrollbar">
       <div className="max-w-7xl mx-auto space-y-12">
@@ -85,6 +123,15 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
           type="file"
           accept=".json"
           onChange={handleFileChange}
+          className="hidden"
+        />
+
+        {/* Hidden file input for cover image upload */}
+        <input
+          ref={coverInputRef}
+          type="file"
+          accept="image/*"
+          onChange={handleCoverFileChange}
           className="hidden"
         />
 
@@ -136,8 +183,9 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {projects.map(project => {
-              // Find first shot with an image to use as thumbnail
+              // Use custom cover image, otherwise fall back to first shot with an image
               const coverShot = project.shots.find(s => s.imageUrl);
+              const displayImage = project.coverImageUrl || coverShot?.imageUrl;
               const shotCount = project.shots.length;
               const charCount = project.characters.length;
               const locCount = project.locations.length;
@@ -150,9 +198,9 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
                 >
                   {/* Thumbnail Area */}
                   <div className="h-32 bg-black relative overflow-hidden border-b border-neutral-800">
-                    {coverShot ? (
+                    {displayImage ? (
                       <img
-                        src={coverShot.imageUrl}
+                        src={displayImage}
                         alt="Project Cover"
                         className="w-full h-full object-cover opacity-60 group-hover:opacity-80 transition-opacity group-hover:scale-105 duration-500"
                       />
@@ -165,6 +213,13 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
 
                     {/* Action buttons */}
                     <div className="absolute top-3 right-3 flex gap-2 opacity-0 group-hover:opacity-100 transition-all z-10">
+                      <button
+                        onClick={(e) => handleCoverUploadClick(e, project.id)}
+                        className="p-2 bg-black/50 text-neutral-400 hover:text-green-400 hover:bg-black rounded-full transition-colors"
+                        title="Upload Cover Image"
+                      >
+                        <ImagePlus className="w-4 h-4" />
+                      </button>
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
