@@ -31,7 +31,8 @@ export default function App() {
             settings: DEFAULT_PROJECT_SETTINGS,
             characters: [],
             locations: [],
-            shots: []
+            shots: [],
+            scenes: []
           };
           setProjects([demoProject]);
           await saveProjectToDB(demoProject);
@@ -53,7 +54,8 @@ export default function App() {
       settings: DEFAULT_PROJECT_SETTINGS,
       characters: [],
       locations: [],
-      shots: []
+      shots: [],
+      scenes: []
     };
     setProjects(prev => [...prev, newProject]);
     setActiveProjectId(newProject.id);
@@ -80,6 +82,16 @@ export default function App() {
     if (key) {
       localStorage.setItem('gemini_api_key', key);
       setApiKey(key);
+    }
+  };
+
+  // Refresh projects from DB (for after import)
+  const handleRefreshProjects = async () => {
+    try {
+      const savedProjects = await getAllProjectsFromDB();
+      setProjects(savedProjects || []);
+    } catch (e) {
+      console.error("Failed to refresh projects", e);
     }
   };
 
@@ -135,6 +147,7 @@ export default function App() {
       onCreate={handleCreateProject}
       onSelect={setActiveProjectId}
       onDelete={handleDeleteProject}
+      onRefresh={handleRefreshProjects}
     />
   );
 }

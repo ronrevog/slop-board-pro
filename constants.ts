@@ -1,15 +1,35 @@
 
 export const CINEMATOGRAPHERS = [
-  "Roger Deakins (Naturalistic, Silhouette)",
-  "Greig Fraser (Textural, Moody, Soft)",
+  // Modern Masters
+  "Roger Deakins (Naturalistic, Silhouette, Clean)",
+  "Greig Fraser (Textural, Moody, Soft, Dune)",
   "Emmanuel Lubezki (Wide angle, Natural Light, Long takes)",
-  "Robert Richardson (High key top-light, Halation)",
-  "Hoyte van Hoytema (IMAX, Shallow DOF, Gritty)",
-  "Bradford Young (Available light, Underexposed)",
-  "Darius Khondji (Rich blacks, High contrast)",
-  "Dean Cundey (Atmospheric, Backlight, Haze)",
-  "Janusz Kamiński (Grainy, Streaking highlights)",
-  "Wong Kar-wai style (Christopher Doyle - Neon, Step-printing)"
+  "Robert Richardson (High key top-light, Halation, Tarantino)",
+  "Hoyte van Hoytema (IMAX, Shallow DOF, Gritty, Nolan)",
+  "Bradford Young (Available light, Underexposed, Intimate)",
+  "Darius Khondji (Rich blacks, High contrast, Se7en)",
+  "Dean Cundey (Atmospheric, Backlight, Haze, Spielberg)",
+  "Janusz Kamiński (Grainy, Streaking highlights, Overexposed)",
+  "Christopher Doyle (Neon, Step-printing, Wong Kar-wai)",
+
+  // Legends
+  "Vittorio Storaro (Color theory, Opera lighting, Warm palette)",
+  "Conrad Hall (Shadowless light, Diffusion, American Beauty)",
+  "Gordon Willis (Prince of Darkness, Top light, Deep blacks)",
+  "Robby Müller (Flat lighting, Daylight, European minimalism)",
+  "Sven Nykvist (Soft light, Faces, Bergman films)",
+  "Vilmos Zsigmond (Flashing technique, Smoke, Diffused)",
+  "John Alcott (Kubrick films, Candlelight, Wide lenses)",
+
+  // Contemporary
+  "Harris Savides (Desaturated, Dread, Digital pioneer)",
+  "Wally Pfister (IMAX, Noir shadows, Nolan films)",
+  "Rodrigo Prieto (Cross-processing, Saturated, Diverse)",
+  "Robert Elswit (Anamorphic, Warm amber, PTA films)",
+  "Matthew Libatique (Music video style, High contrast, Handheld)",
+  "Linus Sandgren (Warm vintage, 35mm Film, Musicals)",
+  "Ari Wegner (Earthy, Wide lenses, Period detail)",
+  "Kyung-Pyo Hong (Dreamlike, Surreal, Korean cinema)"
 ];
 
 export const FILM_STOCKS = [

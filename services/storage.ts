@@ -49,3 +49,112 @@ export const getAllProjectsFromDB = async (): Promise<any[]> => {
     request.onerror = () => reject(request.error);
   });
 };
+
+// Export all projects to a JSON file
+export const exportProjectsToFile = async () => {
+  const projects = await getAllProjectsFromDB();
+  const exportData = {
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    appName: 'Slop-Board',
+    projects: projects
+  };
+
+  const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  const date = new Date().toISOString().split('T')[0];
+  link.download = `slop-board-backup-${date}.json`;
+  link.href = url;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+
+  return projects.length;
+};
+
+// Export a single project to a JSON file
+export const exportSingleProjectToFile = (project: any) => {
+  const exportData = {
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    appName: 'Slop-Board',
+    projects: [project]
+  };
+
+  const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  const date = new Date().toISOString().split('T')[0];
+  const sanitizedTitle = project.title.replace(/[^a-z0-9]/gi, '-').toLowerCase();
+  link.download = `slop-board-${sanitizedTitle}-${date}.json`;
+  link.href = url;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+};
+
+// Import projects from a JSON file
+export const importProjectsFromFile = async (file: File, mode: 'merge' | 'replace' = 'merge'): Promise<{ imported: number; skipped: number }> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+
+    reader.onload = async (e) => {
+      try {
+        const content = e.target?.result as string;
+        const data = JSON.parse(content);
+
+        // Validate the file structure
+        if (!data.projects || !Array.isArray(data.projects)) {
+          throw new Error('Invalid backup file: missing projects array');
+        }
+
+        if (data.appName && data.appName !== 'Slop-Board') {
+          throw new Error('Invalid backup file: not a Slop-Board backup');
+        }
+
+        let imported = 0;
+        let skipped = 0;
+
+        // If replace mode, clear existing projects first
+        if (mode === 'replace') {
+          const existingProjects = await getAllProjectsFromDB();
+          for (const project of existingProjects) {
+            await deleteProjectFromDB(project.id);
+          }
+        }
+
+        // Get existing project IDs for merge mode
+        const existingIds = mode === 'merge'
+          ? new Set((await getAllProjectsFromDB()).map(p => p.id))
+          : new Set();
+
+        // Import each project
+        for (const project of data.projects) {
+          if (!project.id) {
+            skipped++;
+            continue;
+          }
+
+          if (mode === 'merge' && existingIds.has(project.id)) {
+            // In merge mode, create new ID for duplicates
+            project.id = crypto.randomUUID();
+            project.title = `${project.title} (Imported)`;
+          }
+
+          await saveProjectToDB(project);
+          imported++;
+        }
+
+        resolve({ imported, skipped });
+      } catch (err) {
+        reject(err);
+      }
+    };
+
+    reader.onerror = () => reject(new Error('Failed to read file'));
+    reader.readAsText(file);
+  });
+};

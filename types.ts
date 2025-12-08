@@ -44,6 +44,13 @@ export interface Character {
   imageUrl?: string; // Base64
   isGenerating?: boolean;
   isEditing?: boolean;
+  // Extended fields for more precise editing
+  age?: string;
+  occupation?: string;
+  wardrobe?: string;
+  physicalFeatures?: string;
+  personality?: string;
+  voiceNotes?: string;
 }
 
 export interface Location {
@@ -53,6 +60,13 @@ export interface Location {
   imageUrl?: string; // Base64
   isGenerating?: boolean;
   isEditing?: boolean;
+  // Extended fields for more precise editing
+  timeOfDay?: string;
+  weather?: string;
+  atmosphere?: string;
+  keyProps?: string;
+  soundAmbience?: string;
+  practicalLighting?: string;
 }
 
 export interface DialogueLine {
