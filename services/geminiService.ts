@@ -343,13 +343,23 @@ export const generateShotImage = async (
   const activeLocation = allLocations.find(l => l.id === shot.locationId);
   const referenceShot = shot.referenceShotId ? allShots.find(s => s.id === shot.referenceShotId) : null;
 
-  // Build Text Context for missing visuals or fallback
-  let textContext = "CONTEXT:\n";
-  activeCharacters.forEach(c => {
-    textContext += `- Character "${c.name}": ${c.description}\n`;
+  // Build Text Context - include ALL characters and locations for full context
+  // This ensures descriptions are always available to the model
+  let textContext = "AVAILABLE CHARACTERS IN PROJECT:\n";
+  allCharacters.forEach(c => {
+    const isInShot = shot.characters.includes(c.id);
+    textContext += `- ${c.name}${isInShot ? ' [IN THIS SHOT]' : ''}: ${c.description || 'No description'}\n`;
   });
+
+  textContext += "\nAVAILABLE LOCATIONS IN PROJECT:\n";
+  allLocations.forEach(l => {
+    const isActiveLocation = l.id === shot.locationId;
+    textContext += `- ${l.name}${isActiveLocation ? ' [THIS SHOT\'S LOCATION]' : ''}: ${l.description || 'No description'}\n`;
+  });
+
+  // Highlight the specific location for this shot
   if (activeLocation) {
-    textContext += `- Location "${activeLocation.name}": ${activeLocation.description}\n`;
+    textContext += `\nSHOT LOCATION: "${activeLocation.name}" - ${activeLocation.description}\n`;
   }
 
   // Build Dialogue Context for facial expressions/mouth shape
@@ -541,6 +551,19 @@ export const alterShotImage = async (
   const activeCharacters = allCharacters.filter(c => shot.characters.includes(c.id));
   const activeLocation = allLocations.find(l => l.id === shot.locationId);
   const referenceShot = shot.referenceShotId ? allShots.find(s => s.id === shot.referenceShotId) : null;
+
+  // Build Text Context with ALL characters and locations
+  let textContext = "AVAILABLE CHARACTERS IN PROJECT:\n";
+  allCharacters.forEach(c => {
+    const isInShot = shot.characters.includes(c.id);
+    textContext += `- ${c.name}${isInShot ? ' [IN THIS SHOT]' : ''}: ${c.description || 'No description'}\n`;
+  });
+
+  textContext += "\nAVAILABLE LOCATIONS IN PROJECT:\n";
+  allLocations.forEach(l => {
+    const isActiveLocation = l.id === shot.locationId;
+    textContext += `- ${l.name}${isActiveLocation ? ' [THIS SHOT\'S LOCATION]' : ''}: ${l.description || 'No description'}\n`;
+  });
 
   const parts: any[] = [];
 
