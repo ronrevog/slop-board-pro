@@ -92,9 +92,13 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ initialProject, on
     }));
   };
 
-  // Auto-save effect: Whenever 'project' changes, notify parent
+  // Auto-save effect: Debounced to prevent constant IndexedDB writes
   useEffect(() => {
-    onSave(project);
+    const timeoutId = setTimeout(() => {
+      onSave(project);
+    }, 1000); // Wait 1 second after last change before saving
+
+    return () => clearTimeout(timeoutId);
   }, [project, onSave]);
 
   const handleSettingChange = (key: keyof CinematicSettings, value: string) => {
