@@ -394,11 +394,24 @@ export const generateShotImage = async (
     `;
   }
 
-  // Main Cinematic Prompt
+  // Main Cinematic Prompt - Character/Location descriptions are CRITICAL and must be followed
   const mainPromptText = `
     TASK: Generate a high-fidelity cinematic movie keyframe.
     
-    <technical_specs>
+    ⚠️ CRITICAL: YOU MUST CAREFULLY READ AND APPLY ALL CHARACTER AND LOCATION DETAILS BELOW ⚠️
+    
+    ${textContext}
+    
+    =============================================
+    SCENE ACTION & VISUAL DESCRIPTION
+    =============================================
+    Action: ${shot.action}
+    Visual Description: ${shot.description}
+    ${dialogueContext}
+    
+    =============================================
+    TECHNICAL SPECIFICATIONS
+    =============================================
     - Cinematographer Style: ${settings.cinematographer}
     - Film Stock: ${settings.filmStock}
     - Lens: ${settings.lens}
@@ -406,23 +419,28 @@ export const generateShotImage = async (
     - Shot Type: ${shot.shotType}
     - Camera Move: ${shot.cameraMove}
     - Aspect Ratio: ${settings.aspectRatio}
-    </technical_specs>
     ${anamorphicInstructions}
-    ${textContext}
-    ${dialogueContext}
 
-    <scene_action>
-    Action: ${shot.action}
-    Visual Description: ${shot.description}
-    </scene_action>
-
-    <instructions>
-    - Match the lighting direction, skin tones, and textures of the references.
-    - If characters are interacting, ensure their relative scale is correct.
-    - If dialogue is present, characters should have appropriate facial expressions (talking, shouting, whispering, listening).
-    - Render with "Masterpiece" quality: 8k resolution, professional color grading, realistic textures, volumetric lighting.
-    ${isAnamorphicLens ? '- Apply classic anamorphic lens characteristics: oval bokeh, blue horizontal flares, and cinematic depth.' : ''}
-    </instructions>
+    =============================================
+    MANDATORY INSTRUCTIONS
+    =============================================
+    1. **CHARACTER ACCURACY IS PARAMOUNT**: Each character MUST match their description EXACTLY as specified above. Pay close attention to:
+       - Physical appearance (age, build, hair color, skin tone)
+       - Clothing and costume details
+       - Any distinguishing features mentioned
+    
+    2. **LOCATION ACCURACY IS PARAMOUNT**: The environment MUST match the location description EXACTLY as specified above. Pay attention to:
+       - Architecture and setting details
+       - Time of day and lighting conditions
+       - Atmosphere and mood
+       - Props and environmental elements
+    
+    3. If reference images are provided, use them for visual consistency but OVERRIDE with the text descriptions where they conflict.
+    
+    4. Render with "Masterpiece" quality: 8k resolution, professional color grading, realistic textures, volumetric lighting.
+    
+    5. If dialogue is present, characters should have appropriate facial expressions.
+    ${isAnamorphicLens ? '6. Apply classic anamorphic lens characteristics: oval bokeh, blue horizontal flares, and cinematic depth.' : ''}
   `;
 
   // Map aspect ratio
@@ -691,6 +709,100 @@ export const alterShotImage = async (
     throw new Error("No image generated in response");
   } catch (error) {
     console.error("Alter Shot Error:", error);
+    throw error;
+  }
+};
+
+/**
+ * Updates an asset image by editing it with all the character/location details.
+ * This takes the existing image and modifies it based on the provided detail fields.
+ */
+export const updateAssetWithDetails = async (
+  type: 'Character' | 'Location',
+  item: Character | Location,
+  settings: CinematicSettings
+): Promise<string> => {
+  const ai = getAI();
+
+  if (!item.imageUrl) throw new Error("No image to update");
+
+  // Build a comprehensive prompt from all detail fields
+  let detailPrompt = "";
+
+  if (type === 'Character') {
+    const char = item as Character;
+    detailPrompt = `Update this character image to match these EXACT specifications:
+    
+CHARACTER NAME: ${char.name}
+VISUAL DESCRIPTION: ${char.description || 'Not specified'}
+AGE: ${char.age || 'Not specified'}
+OCCUPATION: ${char.occupation || 'Not specified'}
+WARDROBE/CLOTHING: ${char.wardrobe || 'Not specified'}
+PHYSICAL FEATURES: ${char.physicalFeatures || 'Not specified'}
+PERSONALITY (reflected in expression/posture): ${char.personality || 'Not specified'}
+
+INSTRUCTIONS:
+- Modify the character's appearance to match ALL the details above
+- If age is specified, adjust facial features and skin accordingly
+- If wardrobe is specified, change the clothing to match
+- If physical features are specified, update them accurately
+- Maintain the same pose and composition, but update the character's appearance
+- Keep photorealistic cinematic quality with ${settings.lighting} lighting`;
+  } else {
+    const loc = item as Location;
+    detailPrompt = `Update this location/environment image to match these EXACT specifications:
+
+LOCATION NAME: ${loc.name}
+VISUAL DESCRIPTION: ${loc.description || 'Not specified'}
+TIME OF DAY: ${loc.timeOfDay || 'Not specified'}
+WEATHER: ${loc.weather || 'Not specified'}
+ATMOSPHERE/MOOD: ${loc.atmosphere || 'Not specified'}
+KEY PROPS: ${loc.keyProps || 'Not specified'}
+PRACTICAL LIGHTING: ${loc.practicalLighting || 'Not specified'}
+
+INSTRUCTIONS:
+- Modify the environment to match ALL the details above
+- If time of day is specified, adjust lighting and sky accordingly
+- If weather is specified, add appropriate weather effects
+- If key props are specified, ensure they're visible in the scene
+- If practical lighting is specified, add those light sources
+- Maintain the same camera angle but update the environment details
+- Keep photorealistic cinematic quality in ${settings.cinematographer} style`;
+  }
+
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-3-pro-image-preview',
+      contents: {
+        parts: [
+          {
+            inlineData: {
+              mimeType: getMimeType(item.imageUrl),
+              data: stripBase64Header(item.imageUrl)
+            }
+          },
+          { text: detailPrompt }
+        ]
+      },
+      config: {
+        imageConfig: {
+          aspectRatio: '1:1',
+          imageSize: '2K'
+        }
+      }
+    });
+
+    if (response.candidates && response.candidates.length > 0) {
+      for (const part of response.candidates[0].content.parts) {
+        if (part.inlineData) {
+          return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
+        }
+      }
+    }
+
+    throw new Error("No image generated from update");
+  } catch (error) {
+    console.error("Update Asset Error:", error);
     throw error;
   }
 };

@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
-import { analyzeScript, generateShotImage, editImage, generateAssetImage, alterShotImage, generateShotVideo, extendShotVideo } from '../services/geminiService';
+import { analyzeScript, generateShotImage, editImage, generateAssetImage, alterShotImage, generateShotVideo, extendShotVideo, updateAssetWithDetails } from '../services/geminiService';
 import { Project, Shot, CinematicSettings, Character, Location, VideoSegment, Scene } from '../types';
 import { CINEMATOGRAPHERS, FILM_STOCKS, LENSES, LIGHTING_STYLES, ANAMORPHIC_LENS_PROMPTS } from '../constants';
 import { ShotCard } from './ShotCard';
@@ -433,6 +433,58 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ initialProject, on
     }));
   };
 
+  // Update asset image based on all detail fields
+  const handleUpdateAssetWithDetails = async (id: string, type: 'Character' | 'Location') => {
+    const listKey = type === 'Character' ? 'characters' : 'locations';
+    const item = (project[listKey] as any[]).find((i: any) => i.id === id);
+    if (!item || !item.imageUrl) return;
+
+    // Set isUpdating flag
+    setProject(prev => ({
+      ...prev,
+      [listKey]: prev[listKey].map((i: any) => i.id === id ? { ...i, isUpdating: true } : i)
+    }));
+
+    try {
+      // Store original image if not already stored
+      const currentOriginal = item.originalImageUrl || item.imageUrl;
+
+      // Call the update function
+      const newImageUrl = await updateAssetWithDetails(type, item, project.settings);
+
+      setProject(prev => ({
+        ...prev,
+        [listKey]: prev[listKey].map((i: any) => i.id === id ? {
+          ...i,
+          isUpdating: false,
+          imageUrl: newImageUrl,
+          originalImageUrl: currentOriginal // Preserve the original
+        } : i)
+      }));
+    } catch (e) {
+      console.error("Update with details failed:", e);
+      setProject(prev => ({
+        ...prev,
+        [listKey]: prev[listKey].map((i: any) => i.id === id ? { ...i, isUpdating: false } : i)
+      }));
+    }
+  };
+
+  // Reset asset image to original
+  const handleResetAssetToOriginal = (id: string, type: 'Character' | 'Location') => {
+    const listKey = type === 'Character' ? 'characters' : 'locations';
+    const item = (project[listKey] as any[]).find((i: any) => i.id === id);
+    if (!item || !item.originalImageUrl) return;
+
+    setProject(prev => ({
+      ...prev,
+      [listKey]: prev[listKey].map((i: any) => i.id === id ? {
+        ...i,
+        imageUrl: i.originalImageUrl
+      } : i)
+    }));
+  };
+
   const handleGenerateAll = async () => {
     for (const shot of currentShots) {
       if (!shot.imageUrl) await handleGenerateShot(shot.id);
@@ -848,6 +900,8 @@ Style: ${project.settings.cinematographer}, shot on ${project.settings.filmStock
                     onUpload={(id, f) => handleUploadAsset(id, f, 'Character')}
                     onDelete={(id) => handleDeleteAsset(id, 'Character')}
                     onUpdate={(id, u) => handleUpdateAsset(id, u, 'Character')}
+                    onUpdateWithDetails={(id) => handleUpdateAssetWithDetails(id, 'Character')}
+                    onResetToOriginal={(id) => handleResetAssetToOriginal(id, 'Character')}
                   />
                 ))}
               </div>
@@ -874,6 +928,8 @@ Style: ${project.settings.cinematographer}, shot on ${project.settings.filmStock
                     onUpload={(id, f) => handleUploadAsset(id, f, 'Location')}
                     onDelete={(id) => handleDeleteAsset(id, 'Location')}
                     onUpdate={(id, u) => handleUpdateAsset(id, u, 'Location')}
+                    onUpdateWithDetails={(id) => handleUpdateAssetWithDetails(id, 'Location')}
+                    onResetToOriginal={(id) => handleResetAssetToOriginal(id, 'Location')}
                   />
                 ))}
               </div>

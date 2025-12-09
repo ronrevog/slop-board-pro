@@ -1,7 +1,7 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { Character, Location } from '../types';
-import { RefreshCw, Sparkles, SendHorizontal, Upload, Trash2, Wand2, ImagePlus, Download, ChevronDown, ChevronUp, User, Clock, Cloud, Palette, Volume2, Lightbulb, Shirt, Brain, Mic, Briefcase, Maximize2, X } from 'lucide-react';
+import { RefreshCw, Sparkles, SendHorizontal, Upload, Trash2, Wand2, ImagePlus, Download, ChevronDown, ChevronUp, User, Clock, Cloud, Palette, Volume2, Lightbulb, Shirt, Brain, Mic, Briefcase, Maximize2, X, RotateCcw, Settings2 } from 'lucide-react';
 import { Button } from './Button';
 
 interface AssetCardProps {
@@ -12,6 +12,8 @@ interface AssetCardProps {
   onUpload: (id: string, file: File) => void;
   onDelete: (id: string) => void;
   onUpdate: (id: string, updates: Partial<Character | Location>) => void;
+  onUpdateWithDetails: (id: string) => void;
+  onResetToOriginal: (id: string) => void;
 }
 
 export const AssetCard: React.FC<AssetCardProps> = ({
@@ -21,7 +23,9 @@ export const AssetCard: React.FC<AssetCardProps> = ({
   onEdit,
   onUpload,
   onDelete,
-  onUpdate
+  onUpdate,
+  onUpdateWithDetails,
+  onResetToOriginal
 }) => {
   const [editPrompt, setEditPrompt] = useState('');
   const [deleteConfirm, setDeleteConfirm] = useState(false);
@@ -721,6 +725,52 @@ export const AssetCard: React.FC<AssetCardProps> = ({
                         placeholder="e.g. Neon signs, fireplace, street lamps"
                         className="w-full bg-neutral-950 border border-neutral-800 rounded-lg px-3 py-2 text-sm text-white placeholder-neutral-600 focus:border-red-600 focus:outline-none"
                       />
+                    </div>
+                  </div>
+                )}
+
+                {/* Update with Details Button */}
+                {item.imageUrl && !item.isGenerating && !item.isEditing && !item.isUpdating && (
+                  <div className="pt-4 border-t border-neutral-800">
+                    <div className="bg-neutral-950 rounded-lg p-4 border border-neutral-800">
+                      <h4 className="text-xs uppercase tracking-wider text-neutral-500 font-bold mb-3 flex items-center gap-2">
+                        <Settings2 className="w-4 h-4" /> Apply Details to Image
+                      </h4>
+                      <p className="text-xs text-neutral-500 mb-3">
+                        Click "Update Image" to regenerate the image using all the details above. The AI will modify the current image to match the specified details.
+                      </p>
+                      <div className="flex gap-2">
+                        <Button
+                          size="sm"
+                          variant="primary"
+                          onClick={() => onUpdateWithDetails(item.id)}
+                          className="flex-1"
+                        >
+                          <Settings2 className="w-4 h-4 mr-2" />
+                          Update Image with Details
+                        </Button>
+                        {item.originalImageUrl && item.originalImageUrl !== item.imageUrl && (
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            onClick={() => onResetToOriginal(item.id)}
+                            className="flex-1"
+                          >
+                            <RotateCcw className="w-4 h-4 mr-2" />
+                            Reset to Original
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Updating Status */}
+                {item.isUpdating && (
+                  <div className="pt-4 border-t border-neutral-800">
+                    <div className="flex items-center justify-center gap-2 text-blue-500 py-3 bg-blue-950/20 rounded-lg border border-blue-900/50">
+                      <div className="w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+                      <span className="text-sm font-medium">Updating image with details...</span>
                     </div>
                   </div>
                 )}

@@ -42,8 +42,10 @@ export interface Character {
   name: string;
   description: string;
   imageUrl?: string; // Base64
+  originalImageUrl?: string; // Base64 - stores the first generated/uploaded image for reset
   isGenerating?: boolean;
   isEditing?: boolean;
+  isUpdating?: boolean; // For "Update with Details" operation
   // Extended fields for more precise editing
   age?: string;
   occupation?: string;
@@ -58,8 +60,10 @@ export interface Location {
   name: string;
   description: string;
   imageUrl?: string; // Base64
+  originalImageUrl?: string; // Base64 - stores the first generated/uploaded image for reset
   isGenerating?: boolean;
   isEditing?: boolean;
+  isUpdating?: boolean; // For "Update with Details" operation
   // Extended fields for more precise editing
   timeOfDay?: string;
   weather?: string;
