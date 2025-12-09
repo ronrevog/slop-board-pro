@@ -29,7 +29,12 @@ export const CINEMATOGRAPHERS = [
   "Matthew Libatique (Music video style, High contrast, Handheld)",
   "Linus Sandgren (Warm vintage, 35mm Film, Musicals)",
   "Ari Wegner (Earthy, Wide lenses, Period detail)",
-  "Kyung-Pyo Hong (Dreamlike, Surreal, Korean cinema)"
+  "Kyung-Pyo Hong (Dreamlike, Surreal, Korean cinema)",
+
+  // Animation
+  "Pixar 3D Animation (Subsurface scattering, Global illumination, Stylized realism)",
+  "Studio Ghibli (Watercolor backgrounds, Hand-drawn, Whimsical)",
+  "Spider-Verse Style (Halftone dots, Comic book frames, Variable framerate)"
 ];
 
 export const FILM_STOCKS = [
