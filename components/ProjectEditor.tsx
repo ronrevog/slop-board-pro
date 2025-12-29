@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
-import { analyzeScript, generateShotImage, editImage, generateAssetImage, alterShotImage, generateShotVideo, extendShotVideo, updateAssetWithDetails } from '../services/geminiService';
+import { analyzeScript, generateShotImage, editImage, generateAssetImage, alterShotImage, generateShotVideo, extendShotVideo, updateAssetWithDetails, generateCoverageShots } from '../services/geminiService';
 import { Project, Shot, CinematicSettings, Character, Location, VideoSegment, Scene } from '../types';
 import { CINEMATOGRAPHERS, FILM_STOCKS, LENSES, LIGHTING_STYLES, ANAMORPHIC_LENS_PROMPTS } from '../constants';
 import { ShotCard } from './ShotCard';
@@ -8,7 +8,7 @@ import { AssetCard } from './AssetCard';
 import { Button } from './Button';
 import { ShotDetailModal } from './ShotDetailModal';
 import { VideoShotCard } from './VideoShotCard';
-import { Clapperboard, Settings, Users, MapPin, Film, ChevronRight, LayoutGrid, Plus, ChevronLeft, Home, Video, Play, Loader2, Download, AlertCircle, ImageIcon, MonitorPlay, Layers, Trash2, Edit3, ChevronDown, ChevronUp } from 'lucide-react';
+import { Clapperboard, Settings, Users, MapPin, Film, ChevronRight, LayoutGrid, Plus, ChevronLeft, Home, Video, Play, Loader2, Download, AlertCircle, ImageIcon, MonitorPlay, Layers, Trash2, Edit3, ChevronDown, ChevronUp, Focus } from 'lucide-react';
 
 interface ProjectEditorProps {
   initialProject: Project;
@@ -35,6 +35,8 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ initialProject, on
   const [activeSceneId, setActiveSceneId] = useState<string>(() => project.scenes?.[0]?.id || '');
   const [activeTab, setActiveTab] = useState<'script' | 'characters' | 'locations' | 'board' | 'video'>('board');
   const [isBreakingDown, setIsBreakingDown] = useState(false);
+  const [isGeneratingCoverage, setIsGeneratingCoverage] = useState(false);
+  const [coverageSourceShotId, setCoverageSourceShotId] = useState<string | null>(null);
   const [expandedShotId, setExpandedShotId] = useState<string | null>(null);
   const [editingSceneName, setEditingSceneName] = useState<string | null>(null);
   const [scenesCollapsed, setScenesCollapsed] = useState(false);
@@ -491,6 +493,174 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ initialProject, on
     }
   };
 
+  // --- Coverage Handler ---
+  const handleGenerateCoverage = async () => {
+    if (!activeSceneId) return;
+
+    setIsGeneratingCoverage(true);
+    try {
+      // Build scene description from script content or existing shots
+      const sceneScript = activeScene?.scriptContent || project.scriptContent || '';
+      const existingShotDescriptions = currentShots.map(s => s.description).filter(Boolean).join('. ');
+      const sceneDescription = sceneScript || existingShotDescriptions || `A scene with ${project.characters.map(c => c.name).join(' and ')}`;
+
+      // Get the active location for this scene
+      const activeLocationId = currentShots[0]?.locationId || project.locations[0]?.id;
+      const activeLocation = project.locations.find(l => l.id === activeLocationId);
+
+      // Generate coverage shots using AI
+      const coverageSpecs = await generateCoverageShots(
+        sceneDescription,
+        project.characters,
+        activeLocation,
+        project.settings,
+        currentShots
+      );
+
+      // Convert coverage specs to Shot objects
+      const startingNumber = currentShots.length + 1;
+      const newShots: Shot[] = coverageSpecs.map((spec, idx) => {
+        // Try to link characters based on focusCharacter
+        const linkedCharacters: string[] = [];
+        if (spec.focusCharacter) {
+          const foundChar = project.characters.find(c =>
+            c.name.toLowerCase().includes(spec.focusCharacter!.toLowerCase()) ||
+            spec.focusCharacter!.toLowerCase().includes(c.name.toLowerCase())
+          );
+          if (foundChar) linkedCharacters.push(foundChar.id);
+        }
+        // For wide/two shots, include all characters
+        if (spec.coverageType.toLowerCase().includes('master') ||
+          spec.coverageType.toLowerCase().includes('two-shot') ||
+          spec.coverageType.toLowerCase().includes('wide')) {
+          project.characters.forEach(c => {
+            if (!linkedCharacters.includes(c.id)) linkedCharacters.push(c.id);
+          });
+        }
+
+        // Build dialogue lines if present
+        const dialogueLines = [];
+        if (spec.dialogue && spec.speaker) {
+          const speakerChar = project.characters.find(c =>
+            c.name.toLowerCase() === spec.speaker?.toLowerCase()
+          );
+          dialogueLines.push({
+            id: crypto.randomUUID(),
+            speakerId: speakerChar?.id || "",
+            text: spec.dialogue
+          });
+        }
+
+        return {
+          id: crypto.randomUUID(),
+          number: startingNumber + idx,
+          description: `[${spec.coverageType}] ${spec.description}`,
+          action: spec.action || '',
+          dialogueLines,
+          shotType: (spec.shotType as any) || 'Medium',
+          cameraMove: (spec.cameraMove as any) || 'Static',
+          characters: linkedCharacters,
+          locationId: activeLocationId || '',
+          isGenerating: false,
+          isEditing: false,
+        };
+      });
+
+      // Add all coverage shots to the scene
+      updateSceneShots(activeSceneId, shots => [...shots, ...newShots]);
+
+    } catch (e) {
+      console.error("Coverage generation failed:", e);
+    } finally {
+      setIsGeneratingCoverage(false);
+    }
+  };
+
+  // --- Image-Based Coverage Handler ---
+  const handleGenerateCoverageFromImage = async (sourceShotId: string) => {
+    if (!activeSceneId) return;
+
+    const sourceShot = currentShots.find(s => s.id === sourceShotId);
+    if (!sourceShot || !sourceShot.imageUrl) return;
+
+    setCoverageSourceShotId(sourceShotId);
+    try {
+      // Build scene description from the source shot
+      const sceneDescription = sourceShot.description || sourceShot.action || `A cinematic scene`;
+
+      // Get the location from the source shot
+      const activeLocationId = sourceShot.locationId || project.locations[0]?.id;
+      const activeLocation = project.locations.find(l => l.id === activeLocationId);
+
+      // Generate coverage shots using AI (same function, but shots will use reference)
+      const coverageSpecs = await generateCoverageShots(
+        sceneDescription,
+        project.characters,
+        activeLocation,
+        project.settings,
+        currentShots
+      );
+
+      // Convert coverage specs to Shot objects, ALL with referenceShotId pointing to source
+      const startingNumber = currentShots.length + 1;
+      const newShots: Shot[] = coverageSpecs.map((spec, idx) => {
+        // Try to link characters based on focusCharacter
+        const linkedCharacters: string[] = [];
+        if (spec.focusCharacter) {
+          const foundChar = project.characters.find(c =>
+            c.name.toLowerCase().includes(spec.focusCharacter!.toLowerCase()) ||
+            spec.focusCharacter!.toLowerCase().includes(c.name.toLowerCase())
+          );
+          if (foundChar) linkedCharacters.push(foundChar.id);
+        }
+        // For wide/two shots, include all characters
+        if (spec.coverageType.toLowerCase().includes('master') ||
+          spec.coverageType.toLowerCase().includes('two-shot') ||
+          spec.coverageType.toLowerCase().includes('wide')) {
+          project.characters.forEach(c => {
+            if (!linkedCharacters.includes(c.id)) linkedCharacters.push(c.id);
+          });
+        }
+
+        // Build dialogue lines if present
+        const dialogueLines = [];
+        if (spec.dialogue && spec.speaker) {
+          const speakerChar = project.characters.find(c =>
+            c.name.toLowerCase() === spec.speaker?.toLowerCase()
+          );
+          dialogueLines.push({
+            id: crypto.randomUUID(),
+            speakerId: speakerChar?.id || "",
+            text: spec.dialogue
+          });
+        }
+
+        return {
+          id: crypto.randomUUID(),
+          number: startingNumber + idx,
+          description: `[${spec.coverageType}] ${spec.description}`,
+          action: spec.action || '',
+          dialogueLines,
+          shotType: (spec.shotType as any) || 'Medium',
+          cameraMove: (spec.cameraMove as any) || 'Static',
+          characters: linkedCharacters,
+          locationId: activeLocationId || '',
+          referenceShotId: sourceShotId, // KEY: Set source shot as reference for visual consistency
+          isGenerating: false,
+          isEditing: false,
+        };
+      });
+
+      // Add all coverage shots to the scene
+      updateSceneShots(activeSceneId, shots => [...shots, ...newShots]);
+
+    } catch (e) {
+      console.error("Image-based coverage generation failed:", e);
+    } finally {
+      setCoverageSourceShotId(null);
+    }
+  };
+
   // --- Video Handlers ---
 
   // Helper to determine depth of field based on shot type and lens
@@ -848,6 +1018,9 @@ Style: ${project.settings.cinematographer}, shot on ${project.settings.filmStock
                 <Button size="sm" variant="secondary" onClick={handleAddShot}>
                   <Plus className="w-4 h-4 mr-2" /> Add Shot
                 </Button>
+                <Button size="sm" variant="secondary" onClick={handleGenerateCoverage} isLoading={isGeneratingCoverage} disabled={project.characters.length === 0}>
+                  <Focus className="w-4 h-4 mr-2" /> Coverage
+                </Button>
                 <Button variant="danger" size="sm" onClick={handleGenerateAll} disabled={currentShots.length === 0}>
                   Render All Frames
                 </Button>
@@ -964,6 +1137,8 @@ Style: ${project.settings.cinematographer}, shot on ${project.settings.filmStock
                       onUpload={handleUploadShotImage}
                       onExpand={setExpandedShotId}
                       onDuplicate={handleDuplicateShot}
+                      onCoverageFromImage={handleGenerateCoverageFromImage}
+                      isCoverageGenerating={coverageSourceShotId === shot.id}
                     />
                   ))}
                 </div>

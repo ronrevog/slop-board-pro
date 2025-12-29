@@ -104,6 +104,138 @@ export interface ScriptAnalysisResult {
   locations: ExtractedLocation[];
 }
 
+export interface CoverageShotSpec {
+  coverageType: string; // e.g. "Master Wide", "OTS A→B", etc.
+  description: string;
+  shotType: string;
+  cameraMove: string;
+  action: string;
+  dialogue?: string;
+  speaker?: string;
+  focusCharacter?: string; // Character name this shot focuses on
+}
+
+/**
+ * Generates 8 standard coverage shots for a scene.
+ * Coverage includes: Master Wide, Two-Shot, Close-ups of each character,
+ * Over-the-shoulder shots, and unique angles.
+ */
+export const generateCoverageShots = async (
+  sceneDescription: string,
+  characters: Character[],
+  location: Location | undefined,
+  settings: CinematicSettings,
+  existingShots: Shot[] = []
+): Promise<CoverageShotSpec[]> => {
+  const ai = getAI();
+
+  // Build character list for context
+  const characterNames = characters.map(c => c.name).join(', ') || 'unspecified characters';
+  const characterDescriptions = characters.map(c => `- ${c.name}: ${c.description || 'No description'}`).join('\n') || 'No character details available';
+
+  // Build location context
+  const locationContext = location
+    ? `Location: ${location.name} - ${location.description || 'No description'}`
+    : 'Location: Unspecified';
+
+  // Build existing shots context
+  let existingShotsContext = "";
+  if (existingShots.length > 0) {
+    existingShotsContext = `\nEXISTING SHOTS IN SCENE (for context, avoid exact duplicates):\n`;
+    existingShots.slice(0, 5).forEach((s, i) => {
+      existingShotsContext += `- Shot ${i + 1}: ${s.shotType}, ${s.description?.slice(0, 100) || 'No description'}\n`;
+    });
+  }
+
+  const prompt = `
+  <role>
+  You are an expert cinematographer and 1st AD (Assistant Director) creating a comprehensive coverage plan for a scene.
+  Your job: Generate exactly 8 professional coverage shots that would allow an editor to cut together this scene seamlessly.
+  </role>
+
+  <scene_context>
+  Scene Description/Script: ${sceneDescription || 'A dialogue scene between characters'}
+  
+  Characters in Scene:
+  ${characterDescriptions}
+  
+  ${locationContext}
+  ${existingShotsContext}
+  </scene_context>
+
+  <cinematic_style>
+  - Director of Photography Style: ${settings.cinematographer}
+  - Film Stock: ${settings.filmStock}
+  - Lenses: ${settings.lens}
+  - Lighting: ${settings.lighting}
+  </cinematic_style>
+
+  <coverage_requirements>
+  Generate EXACTLY 8 coverage shots following standard film coverage patterns:
+  
+  1. **MASTER WIDE** - Establishes the full scene, all characters visible, shows environment
+  2. **MEDIUM TWO-SHOT** - Both/main characters in frame at medium distance (waist up)
+  3. **CLOSE-UP CHARACTER A** - ${characters[0]?.name || 'First character'}'s dialogue/reaction shot
+  4. **CLOSE-UP CHARACTER B** - ${characters[1]?.name || characters[0]?.name || 'Second character'}'s dialogue/reaction shot
+  5. **OVER-THE-SHOULDER A→B** - Camera behind ${characters[0]?.name || 'Character A'}, looking at ${characters[1]?.name || 'Character B'}
+  6. **OVER-THE-SHOULDER B→A** - Camera behind ${characters[1]?.name || 'Character B'}, looking at ${characters[0]?.name || 'Character A'}
+  7. **HIGH ANGLE / OVERHEAD** - Looking down on the scene for dramatic effect or to show spatial relationship
+  8. **LOW ANGLE / UNIQUE** - Dramatic low angle, Dutch angle, or creative insert shot
+
+  If there's only ONE character, replace OTS shots with:
+  - POV shot (what the character sees)
+  - Insert shot (hands, object, detail)
+  - Profile shot
+  - Extreme close-up (eyes, mouth)
+  </coverage_requirements>
+
+  <output_format>
+  Return ONLY a valid JSON array with EXACTLY 8 objects:
+  [
+    {
+      "coverageType": "Master Wide",
+      "description": "Detailed visual description of composition, what's in frame, foreground/background elements",
+      "shotType": "Wide",
+      "cameraMove": "Static",
+      "action": "What happens in this shot",
+      "dialogue": "Any dialogue (optional, can be empty string)",
+      "speaker": "Speaker name (optional, can be empty string)",
+      "focusCharacter": "Character name this shot focuses on (optional)"
+    }
+  ]
+  
+  Valid shotType values: "Extreme Wide", "Wide", "Medium", "Close Up", "Extreme Close Up", "Insert", "High Angle", "Low Angle", "Dutch Angle (45°)", "Overhead", "Over the Shoulder"
+  Valid cameraMove values: "Static", "Dolly In", "Dolly Out", "Pan", "Tilt", "Handheld", "Tracking", "Crane", "Arc", "Zoom In", "Zoom Out", "Whip Pan"
+  </output_format>
+  `;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-3-pro-preview',
+      contents: prompt,
+      config: {
+        responseMimeType: 'application/json',
+        temperature: 0.7,
+      }
+    });
+
+    const text = response.text;
+    if (!text) throw new Error("No response from AI");
+
+    const result = JSON.parse(cleanJson(text));
+
+    // Ensure we have exactly 8 shots
+    if (!Array.isArray(result) || result.length === 0) {
+      throw new Error("Invalid coverage response");
+    }
+
+    return result.slice(0, 8); // Ensure max 8 shots
+  } catch (error) {
+    console.error("Coverage Generation Error:", error);
+    throw error;
+  }
+};
+
 /**
  * Comprehensive script analysis that extracts characters, locations, and shot breakdown.
  * Uses gemini-3-pro-preview for complex reasoning.

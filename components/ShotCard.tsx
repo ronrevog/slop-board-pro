@@ -1,7 +1,7 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { Shot, Character, Location } from '../types';
-import { Camera, RefreshCw, SendHorizontal, MessageSquare, MapPin, Users, Edit3, Trash2, Upload, Download, Maximize2, Wand2, Plus, X, Link, Copy } from 'lucide-react';
+import { Camera, RefreshCw, SendHorizontal, MessageSquare, MapPin, Users, Edit3, Trash2, Upload, Download, Maximize2, Wand2, Plus, X, Link, Copy, Focus } from 'lucide-react';
 import { Button } from './Button';
 
 interface ShotCardProps {
@@ -18,6 +18,8 @@ interface ShotCardProps {
   onUpload: (id: string, file: File) => void;
   onExpand: (id: string) => void;
   onDuplicate: (id: string) => void;
+  onCoverageFromImage?: (id: string) => void;
+  isCoverageGenerating?: boolean;
 }
 
 export const ShotCard: React.FC<ShotCardProps> = ({
@@ -33,7 +35,9 @@ export const ShotCard: React.FC<ShotCardProps> = ({
   onDelete,
   onUpload,
   onExpand,
-  onDuplicate
+  onDuplicate,
+  onCoverageFromImage,
+  isCoverageGenerating
 }) => {
   const [editPrompt, setEditPrompt] = useState('');
   const [deleteConfirm, setDeleteConfirm] = useState(false);
@@ -166,6 +170,22 @@ export const ShotCard: React.FC<ShotCardProps> = ({
               <Maximize2 className="w-3 h-3" />
             </Button>
           </div>
+
+          {/* Coverage Button - Only shows when image exists */}
+          {shot.imageUrl && onCoverageFromImage && (
+            <div className="w-full max-w-xs mt-1">
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => onCoverageFromImage(shot.id)}
+                isLoading={isCoverageGenerating}
+                className="w-full"
+                title="Generate 8 coverage shots using this image as reference"
+              >
+                <Focus className="w-3 h-3 mr-2" /> Coverage (8 Shots)
+              </Button>
+            </div>
+          )}
 
           {/* Edit Image Input Overlay */}
           {shot.imageUrl && (
