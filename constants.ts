@@ -46,6 +46,7 @@ export const FILM_STOCKS = [
   "Ilford FP4 Plus (Fine Grain, Sharp B&W)",
   "Fujifilm Eterna 500T (Low Contrast, Cinematic)",
   "Kodachrome 64 (Vintage, Saturated)",
+  "Kodak 5247 100T (Low Grain, Kubrick Era Tungsten)",
   "Alexa LF Digital (Clean, High Dynamic Range)",
   "Sony Venice (Rich Colors, Dual ISO look)",
   "16mm Grain Heavy"
@@ -62,6 +63,16 @@ export const LENSES = [
   "Panavision C-Series 100mm T2.8 (Telephoto, Subject Isolation)",
   "Panavision C-Series 150mm T3.5 (Long Telephoto, Atmosphere)",
   "Panavision C-Series 180mm T2.8 (Super Telephoto, Waterfall Bokeh)",
+
+  // Kubrick / The Shining Lenses (Arriflex 35 BL + Steadicam)
+  "Kinoptik 9.8mm Tegea (Ultra-Wide, Kubrick Distortion, Maze POV)",
+  "Zeiss Super Speed 18mm T1.3 (Fast Wide, Low Light, Sharp)",
+  "Zeiss Super Speed 25mm T1.3 (Fast Wide-Normal, Low Light)",
+  "Zeiss Super Speed 35mm T1.3 (Fast Standard, Low Light, Steadicam)",
+  "Zeiss Super Speed 50mm T1.3 (Fast Normal, Low Light, Sharp)",
+  "Zeiss Super Speed 85mm T1.3 (Fast Portrait, Shallow DOF)",
+  "Cooke Varotal 20-100mm T3.1 (Zoom, Versatile, Kubrick)",
+
   // Other Cinema Lenses
   "Cooke S4/i Prime (Warm, 'Cooke Look')",
   "Zeiss Master Prime (Clinical, Sharp)",
