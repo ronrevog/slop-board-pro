@@ -238,7 +238,7 @@ export const generateCoverageShots = async (
 
 /**
  * Comprehensive script analysis that extracts characters, locations, and shot breakdown.
- * Uses gemini-3-pro-preview for complex reasoning.
+ * Uses gemini-3-pro-preview with Deep Think (thinkingConfig) for advanced narrative analysis.
  */
 export const analyzeScript = async (
   scriptText: string,
@@ -248,8 +248,10 @@ export const analyzeScript = async (
 
   const prompt = `
   <role>
-  You are an award-winning script supervisor + casting director + location scout + cinematographer.
-  Your job: Analyze the provided SCRIPT and extract ALL characters, locations, and break it down into a cinematic shot list.
+  You are a master storyboard artist, cinematographer, and film director combined.
+  You have worked with Spielberg, Kubrick, Nolan, and Villeneuve.
+  Your job: Analyze the provided SCRIPT with extreme attention to detail and create a comprehensive, 
+  SHOT-BY-SHOT storyboard that unfolds the narrative visually like a professional film.
   </role>
 
   <input_script>
@@ -263,6 +265,41 @@ export const analyzeScript = async (
   - Lighting: ${settings.lighting}
   </cinematic_style>
 
+  <deep_analysis_instructions>
+  ⚠️ CRITICAL: You MUST deeply analyze the script before generating shots.
+  
+  STEP 1 - PARSE THE NARRATIVE:
+  - Read the ENTIRE script word by word
+  - Identify every scene location change
+  - Note every character entrance/exit
+  - Mark every emotional beat (tension, relief, conflict, revelation, climax)
+  - Identify key visual moments (a glance, a gesture, an object)
+  
+  STEP 2 - PLAN EACH SCENE:
+  For each scene/location in the script:
+  a) ESTABLISHING SHOT - Where are we? What time of day?
+  b) MASTER SHOT - Show the geography, all characters in scene
+  c) COVERAGE SHOTS - For dialogue: alternating singles, OTS shots, reaction shots
+  d) INSERT SHOTS - Important objects, hands, details mentioned in script
+  e) TRANSITION - How do we exit? Cut, dissolve, match cut?
+  
+  STEP 3 - MATCH SHOTS TO EMOTION:
+  - Close-Up = Intimacy, emotion, importance
+  - Wide Shot = Isolation, establishing, scale
+  - Dutch Angle = Unease, disorientation
+  - Low Angle = Power, dominance
+  - High Angle = Vulnerability, surveillance
+  - Handheld = Chaos, documentary feel, urgency
+  - Dolly In = Drawing viewer attention, revelation
+  - Dolly Out = Releasing, showing context
+  
+  STEP 4 - CREATE RHYTHM:
+  - Vary shot lengths (don't make all shots the same type)
+  - Action scenes = more shots, faster cutting
+  - Emotional scenes = longer takes, fewer cuts
+  - Build to climax with tighter framing
+  </deep_analysis_instructions>
+
   <extraction_rules>
   1. **CHARACTERS**: Extract EVERY character mentioned, named, or implied. Include:
      - Name (use descriptive names like "Old Man" or "Guard #1" if no name given)
@@ -273,10 +310,26 @@ export const analyzeScript = async (
      - Name (e.g. "Downtown Alley", "Sarah's Apartment", "Police Station Lobby")
      - Detailed environmental description: time of day, weather, architecture, lighting conditions, mood, key props/furniture
   
-  3. **SHOTS**: Create a cinematic shot breakdown:
-     - 5-15 shots that tell the story visually
-     - Strict continuity across ALL shots
-     - Include character names and locations in descriptions
+  3. **SHOTS** - THE STORYBOARD (MOST IMPORTANT):
+     Generate 10-30 shots that tell the COMPLETE story. Every major story beat needs a shot.
+     
+     For EACH shot, you MUST specify:
+     - description: HYPER-SPECIFIC visual composition 
+       ✓ GOOD: "Low angle close-up of JACK's face, sweat beading on forehead, eyes wide with manic intensity. The typewriter keys are visible in soft focus foreground. Harsh tungsten light from desk lamp creates deep shadows under his eyes."
+       ✗ BAD: "Shot of Jack looking crazy"
+     
+     - shotType: Choose based on emotional need, not randomly
+     - cameraMove: Every move must have PURPOSE. Static = stability. Handheld = chaos.
+     - action: What CHANGES or HAPPENS in this shot. Be specific.
+     - dialogue: Include the EXACT line if there is one
+     - speaker: Who says it
+     
+     SHOT SEQUENCE RULES:
+     - Start scenes with WIDE establishing shots
+     - Dialogue scenes need: Master → OTS A → OTS B → Singles → Reactions
+     - Action scenes need: Wide geography → Medium action → Close details → Wide aftermath
+     - End scenes with transition shots (character exiting, door closing, sunset, etc.)
+     - EVERY line of dialogue should have a corresponding shot
   </extraction_rules>
 
   <output_format>
@@ -296,15 +349,18 @@ export const analyzeScript = async (
     ],
     "shots": [
       {
-        "description": "Detailed visual description of composition, foreground/background, lighting, depth",
-        "shotType": "Extreme Wide | Wide | Medium | Close Up | Extreme Close Up | Insert | High Angle | Low Angle | Dutch Angle (45°)",
-        "cameraMove": "Static | Dolly In | Dolly Out | Pan | Tilt | Handheld | Tracking | Crane | Arc",
-        "action": "What visibly happens in the frame",
-        "dialogue": "Spoken line (optional, empty string if none)",
-        "speaker": "Speaker name (optional, empty string if none)"
+        "description": "HYPER-DETAILED visual composition - camera angle, framing, what's in foreground/background, lighting quality, depth of field, character positioning, facial expressions, visible props",
+        "shotType": "Extreme Wide | Wide | Medium | Close Up | Extreme Close Up | Insert | High Angle | Low Angle | Dutch Angle (45°) | Overhead | Over the Shoulder",
+        "cameraMove": "Static | Dolly In | Dolly Out | Pan | Tilt | Handheld | Tracking | Crane | Arc | Zoom In | Zoom Out | Whip Pan",
+        "action": "What SPECIFICALLY happens - character movements, gestures, expressions changing",
+        "dialogue": "Exact spoken line (empty string if none)",
+        "speaker": "Character name (empty string if none)"
       }
     ]
   }
+  
+  IMPORTANT: Generate enough shots to cover the ENTIRE script. If the script has 5 scenes, you need at least 15-25 shots. 
+  One line of dialogue = at least one shot. One action beat = at least one shot.
   </output_format>
   `;
 
@@ -315,6 +371,10 @@ export const analyzeScript = async (
       config: {
         responseMimeType: 'application/json',
         temperature: 0.7,
+        // Enable Deep Think with extended reasoning budget
+        thinkingConfig: {
+          thinkingBudget: 10000 // Allow extensive reasoning for narrative analysis
+        }
       }
     });
 
