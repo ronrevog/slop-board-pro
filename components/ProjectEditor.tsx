@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { analyzeScript, analyzeScreenplayPDF, extractTextFromPDF, generateShotImage, editImage, generateAssetImage, alterShotImage, generateShotVideo, extendShotVideo, updateAssetWithDetails, generateCoverageShots } from '../services/geminiService';
-import { Project, Shot, CinematicSettings, Character, Location, VideoSegment, Scene, ImageHistoryEntry } from '../types';
+import { Project, Shot, CinematicSettings, Character, Location, VideoSegment, Scene, ImageHistoryEntry, VideoProviderSettings, DEFAULT_VIDEO_SETTINGS } from '../types';
 import { CINEMATOGRAPHERS, FILM_STOCKS, LENSES, LIGHTING_STYLES, ANAMORPHIC_LENS_PROMPTS } from '../constants';
 import { ShotCard } from './ShotCard';
 import { AssetCard } from './AssetCard';
@@ -33,7 +33,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ initialProject, on
     return initialProject;
   });
   const [activeSceneId, setActiveSceneId] = useState<string>(() => project.scenes?.[0]?.id || '');
-  const [activeTab, setActiveTab] = useState<'script' | 'characters' | 'locations' | 'board' | 'video'>('board');
+  const [activeTab, setActiveTab] = useState<'script' | 'characters' | 'locations' | 'board' | 'video' | 'settings'>('board');
   const [isBreakingDown, setIsBreakingDown] = useState(false);
   const [isGeneratingCoverage, setIsGeneratingCoverage] = useState(false);
   const [coverageSourceShotId, setCoverageSourceShotId] = useState<string | null>(null);
@@ -1326,6 +1326,10 @@ Style: ${project.settings.cinematographer}, shot on ${project.settings.filmStock
             <button onClick={() => setActiveTab('video')} className={`px-4 py-2 text-sm font-medium rounded-md transition-colors flex items-center gap-2 ${activeTab === 'video' ? 'bg-red-900/20 text-red-500 border border-red-900/30' : 'text-neutral-400 hover:text-white'}`}>
               <Video className="w-3 h-3" /> Video
             </button>
+            <ChevronRight className="w-4 h-4 text-neutral-600" />
+            <button onClick={() => setActiveTab('settings')} className={`px-4 py-2 text-sm font-medium rounded-md transition-colors flex items-center gap-2 ${activeTab === 'settings' ? 'bg-neutral-800 text-white' : 'text-neutral-400 hover:text-white'}`}>
+              <Settings className="w-3 h-3" /> Settings
+            </button>
           </div>
           <div className="flex items-center gap-4">
             {activeTab === 'board' && (
@@ -1669,6 +1673,207 @@ TIP: Select (highlight) a portion of text and click 'Analyze Scene' to analyze o
                   />
                 ))}
               </div>
+            </div>
+          )}
+
+          {activeTab === 'settings' && (
+            <div className="max-w-3xl mx-auto space-y-8 animate-fade-in pb-20">
+              <h2 className="text-2xl font-serif text-white flex items-center gap-2">
+                <Settings className="w-5 h-5 text-red-600" /> Project Settings
+              </h2>
+
+              {/* Video Provider Selection */}
+              <div className="bg-neutral-900 p-6 rounded-lg border border-neutral-800 shadow-xl">
+                <h3 className="text-lg font-serif text-white flex items-center gap-2 mb-4">
+                  <Video className="w-5 h-5 text-red-600" />
+                  Video Generation Provider
+                </h3>
+                <div className="grid grid-cols-2 gap-4">
+                  <button
+                    onClick={() => setProject(p => ({ ...p, videoSettings: { ...(p.videoSettings || DEFAULT_VIDEO_SETTINGS), provider: 'veo' } }))}
+                    className={`p-4 rounded-lg border-2 transition-all ${(project.videoSettings?.provider || 'veo') === 'veo'
+                      ? 'border-red-600 bg-red-900/20 text-white'
+                      : 'border-neutral-700 bg-neutral-800/50 text-neutral-400 hover:border-neutral-500'
+                      }`}
+                  >
+                    <div className="font-bold text-lg mb-1">Veo (Google)</div>
+                    <div className="text-xs text-neutral-500">Uses AI Studio API key</div>
+                  </button>
+                  <button
+                    onClick={() => setProject(p => ({ ...p, videoSettings: { ...(p.videoSettings || DEFAULT_VIDEO_SETTINGS), provider: 'fal-wan' } }))}
+                    className={`p-4 rounded-lg border-2 transition-all ${project.videoSettings?.provider === 'fal-wan'
+                      ? 'border-red-600 bg-red-900/20 text-white'
+                      : 'border-neutral-700 bg-neutral-800/50 text-neutral-400 hover:border-neutral-500'
+                      }`}
+                  >
+                    <div className="font-bold text-lg mb-1">Wan v2.6 (fal.ai)</div>
+                    <div className="text-xs text-neutral-500">Image-to-Video, 5-15s</div>
+                  </button>
+                </div>
+              </div>
+
+              {/* fal.ai Wan v2.6 Settings */}
+              {project.videoSettings?.provider === 'fal-wan' && (
+                <div className="bg-neutral-900 p-6 rounded-lg border border-neutral-800 shadow-xl space-y-6">
+                  <h3 className="text-lg font-serif text-white flex items-center gap-2">
+                    <Settings className="w-5 h-5 text-red-600" />
+                    Wan v2.6 Settings
+                  </h3>
+
+                  {/* API Key */}
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold text-neutral-500 uppercase tracking-widest">
+                      fal.ai API Key <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="password"
+                      className="w-full bg-neutral-800 border border-neutral-700 rounded-md p-3 text-sm text-white focus:ring-1 focus:ring-red-500 outline-none"
+                      placeholder="Enter your fal.ai API key..."
+                      value={project.videoSettings?.falApiKey || ''}
+                      onChange={(e) => setProject(p => ({
+                        ...p,
+                        videoSettings: { ...(p.videoSettings || DEFAULT_VIDEO_SETTINGS), falApiKey: e.target.value }
+                      }))}
+                    />
+                    <p className="text-xs text-neutral-600">
+                      Get your API key from <a href="https://fal.ai/dashboard/keys" target="_blank" rel="noopener noreferrer" className="text-red-500 hover:underline">fal.ai/dashboard/keys</a>
+                    </p>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    {/* Resolution */}
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold text-neutral-500 uppercase tracking-widest">Resolution</label>
+                      <select
+                        className="w-full bg-neutral-800 border border-neutral-700 rounded-md p-2 text-sm text-white focus:ring-1 focus:ring-red-500 outline-none"
+                        value={project.videoSettings?.wanResolution || '1080p'}
+                        onChange={(e) => setProject(p => ({
+                          ...p,
+                          videoSettings: { ...(p.videoSettings || DEFAULT_VIDEO_SETTINGS), wanResolution: e.target.value as '720p' | '1080p' }
+                        }))}
+                      >
+                        <option value="720p">720p</option>
+                        <option value="1080p">1080p</option>
+                      </select>
+                    </div>
+
+                    {/* Duration */}
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold text-neutral-500 uppercase tracking-widest">Duration</label>
+                      <select
+                        className="w-full bg-neutral-800 border border-neutral-700 rounded-md p-2 text-sm text-white focus:ring-1 focus:ring-red-500 outline-none"
+                        value={project.videoSettings?.wanDuration || '5'}
+                        onChange={(e) => setProject(p => ({
+                          ...p,
+                          videoSettings: { ...(p.videoSettings || DEFAULT_VIDEO_SETTINGS), wanDuration: e.target.value as '5' | '10' | '15' }
+                        }))}
+                      >
+                        <option value="5">5 seconds</option>
+                        <option value="10">10 seconds</option>
+                        <option value="15">15 seconds</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* Checkboxes */}
+                  <div className="space-y-3">
+                    <button
+                      onClick={() => setProject(p => ({
+                        ...p,
+                        videoSettings: { ...(p.videoSettings || DEFAULT_VIDEO_SETTINGS), wanEnablePromptExpansion: !(p.videoSettings?.wanEnablePromptExpansion ?? true) }
+                      }))}
+                      className="flex items-center gap-2 text-sm text-neutral-300 hover:text-white transition-colors"
+                    >
+                      {project.videoSettings?.wanEnablePromptExpansion !== false ? (
+                        <CheckSquare className="w-5 h-5 text-red-500" />
+                      ) : (
+                        <Square className="w-5 h-5 text-neutral-500" />
+                      )}
+                      Enable Prompt Expansion
+                      <span className="text-xs text-neutral-600">(LLM rewrites prompt for better results)</span>
+                    </button>
+
+                    <button
+                      onClick={() => setProject(p => ({
+                        ...p,
+                        videoSettings: { ...(p.videoSettings || DEFAULT_VIDEO_SETTINGS), wanMultiShots: !(p.videoSettings?.wanMultiShots ?? false) }
+                      }))}
+                      className="flex items-center gap-2 text-sm text-neutral-300 hover:text-white transition-colors"
+                    >
+                      {project.videoSettings?.wanMultiShots ? (
+                        <CheckSquare className="w-5 h-5 text-red-500" />
+                      ) : (
+                        <Square className="w-5 h-5 text-neutral-500" />
+                      )}
+                      Multi-Shots Mode
+                      <span className="text-xs text-neutral-600">(Intelligent scene segmentation)</span>
+                    </button>
+
+                    <button
+                      onClick={() => setProject(p => ({
+                        ...p,
+                        videoSettings: { ...(p.videoSettings || DEFAULT_VIDEO_SETTINGS), wanEnableSafetyChecker: !(p.videoSettings?.wanEnableSafetyChecker ?? true) }
+                      }))}
+                      className="flex items-center gap-2 text-sm text-neutral-300 hover:text-white transition-colors"
+                    >
+                      {project.videoSettings?.wanEnableSafetyChecker !== false ? (
+                        <CheckSquare className="w-5 h-5 text-red-500" />
+                      ) : (
+                        <Square className="w-5 h-5 text-neutral-500" />
+                      )}
+                      Safety Checker
+                      <span className="text-xs text-neutral-600">(Content filter)</span>
+                    </button>
+                  </div>
+
+                  {/* Negative Prompt */}
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold text-neutral-500 uppercase tracking-widest">Negative Prompt</label>
+                    <textarea
+                      className="w-full bg-neutral-800 border border-neutral-700 rounded-md p-3 text-sm text-white focus:ring-1 focus:ring-red-500 outline-none resize-none"
+                      placeholder="Content to avoid (e.g., 'low quality, blurry, defects')"
+                      rows={2}
+                      value={project.videoSettings?.wanNegativePrompt || ''}
+                      onChange={(e) => setProject(p => ({
+                        ...p,
+                        videoSettings: { ...(p.videoSettings || DEFAULT_VIDEO_SETTINGS), wanNegativePrompt: e.target.value }
+                      }))}
+                    />
+                    <p className="text-xs text-neutral-600">Max 500 characters</p>
+                  </div>
+
+                  {/* Seed */}
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold text-neutral-500 uppercase tracking-widest">Seed (Optional)</label>
+                    <input
+                      type="number"
+                      className="w-full bg-neutral-800 border border-neutral-700 rounded-md p-3 text-sm text-white focus:ring-1 focus:ring-red-500 outline-none"
+                      placeholder="Random seed for reproducibility"
+                      value={project.videoSettings?.wanSeed || ''}
+                      onChange={(e) => setProject(p => ({
+                        ...p,
+                        videoSettings: { ...(p.videoSettings || DEFAULT_VIDEO_SETTINGS), wanSeed: e.target.value ? parseInt(e.target.value) : undefined }
+                      }))}
+                    />
+                  </div>
+
+                  {/* Audio URL */}
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold text-neutral-500 uppercase tracking-widest">Audio URL (Optional)</label>
+                    <input
+                      type="url"
+                      className="w-full bg-neutral-800 border border-neutral-700 rounded-md p-3 text-sm text-white focus:ring-1 focus:ring-red-500 outline-none"
+                      placeholder="https://example.com/audio.mp3"
+                      value={project.videoSettings?.wanAudioUrl || ''}
+                      onChange={(e) => setProject(p => ({
+                        ...p,
+                        videoSettings: { ...(p.videoSettings || DEFAULT_VIDEO_SETTINGS), wanAudioUrl: e.target.value }
+                      }))}
+                    />
+                    <p className="text-xs text-neutral-600">Background music URL (WAV/MP3, max 15MB)</p>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>

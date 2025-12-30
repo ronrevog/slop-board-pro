@@ -37,6 +37,22 @@ export interface CinematicSettings {
   colorGrade: string;
 }
 
+export type VideoProvider = 'veo' | 'fal-wan';
+
+export interface VideoProviderSettings {
+  provider: VideoProvider;
+  falApiKey?: string;
+  // Wan v2.6 specific settings
+  wanResolution: '720p' | '1080p';
+  wanDuration: '5' | '10' | '15';
+  wanEnableSafetyChecker: boolean;
+  wanEnablePromptExpansion: boolean;
+  wanMultiShots: boolean;
+  wanNegativePrompt: string;
+  wanSeed?: number;
+  wanAudioUrl?: string;
+}
+
 export interface Character {
   id: string;
   name: string;
@@ -134,9 +150,21 @@ export interface Project {
   title: string;
   scriptContent: string; // Legacy - can be used for overall script or removed
   settings: CinematicSettings;
+  videoSettings?: VideoProviderSettings; // Video generation provider and settings
   characters: Character[]; // Shared across all scenes
   locations: Location[]; // Shared across all scenes
   scenes: Scene[]; // Multiple scenes per project
   shots: Shot[]; // Legacy - for backward compatibility
   coverImageUrl?: string; // Custom cover image for project dashboard
 }
+
+// Default video provider settings
+export const DEFAULT_VIDEO_SETTINGS: VideoProviderSettings = {
+  provider: 'veo',
+  wanResolution: '1080p',
+  wanDuration: '5',
+  wanEnableSafetyChecker: true,
+  wanEnablePromptExpansion: true,
+  wanMultiShots: false,
+  wanNegativePrompt: '',
+};
