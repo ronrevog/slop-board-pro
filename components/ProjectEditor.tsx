@@ -46,6 +46,11 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ initialProject, on
   const [isStandardScreenplayFormat, setIsStandardScreenplayFormat] = useState(true);
   const [pdfFileName, setPdfFileName] = useState<string | null>(null);
 
+  // Text Selection State for partial analysis
+  const [selectedText, setSelectedText] = useState<string>('');
+  const [analyzedRanges, setAnalyzedRanges] = useState<Array<{ start: number; end: number }>>([]);
+  const scriptTextareaRef = React.useRef<HTMLTextAreaElement>(null);
+
   // Get the currently active scene
   const activeScene = project.scenes?.find(s => s.id === activeSceneId) || project.scenes?.[0];
   const currentShots = activeScene?.shots || [];
@@ -115,69 +120,179 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ initialProject, on
     }));
   };
 
+  // Helper function to match character names in text to existing project characters
+  const matchCharacterByName = (name: string, existingCharacters: Character[]): string | undefined => {
+    const normalizedName = name.toLowerCase().trim();
+    // Try exact match first
+    let match = existingCharacters.find(c => c.name.toLowerCase().trim() === normalizedName);
+    if (match) return match.id;
+    // Try partial match (name contains or is contained)
+    match = existingCharacters.find(c =>
+      c.name.toLowerCase().includes(normalizedName) ||
+      normalizedName.includes(c.name.toLowerCase())
+    );
+    return match?.id;
+  };
+
+  // Helper function to match location names to existing project locations
+  const matchLocationByName = (name: string, existingLocations: Location[]): string | undefined => {
+    const normalizedName = name.toLowerCase().trim();
+    // Try exact match first
+    let match = existingLocations.find(l => l.name.toLowerCase().trim() === normalizedName);
+    if (match) return match.id;
+    // Try partial match
+    match = existingLocations.find(l =>
+      l.name.toLowerCase().includes(normalizedName) ||
+      normalizedName.includes(l.name.toLowerCase())
+    );
+    return match?.id;
+  };
+
+  // Get selection from textarea
+  const getTextareaSelection = (): { text: string; start: number; end: number } | null => {
+    const textarea = scriptTextareaRef.current;
+    if (!textarea) return null;
+
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+
+    if (start === end) return null; // No selection
+
+    const selectedText = project.scriptContent.substring(start, end);
+    return { text: selectedText, start, end };
+  };
+
   const handleScriptBreakdown = async () => {
     if (!project.scriptContent.trim()) return;
     setIsBreakingDown(true);
+
     try {
+      // Check if there's a text selection - analyze only the selected portion
+      const selection = getTextareaSelection();
+      const textToAnalyze = selection ? selection.text : project.scriptContent;
+
+      if (!textToAnalyze.trim()) return;
+
       // Use comprehensive script analysis that extracts characters, locations, and shots
-      const analysis = await analyzeScript(project.scriptContent, project.settings);
+      const analysis = await analyzeScript(textToAnalyze, project.settings);
 
-      // Create new characters from extracted data
-      const newCharacters: Character[] = analysis.characters.map(c => ({
-        id: crypto.randomUUID(),
-        name: c.name,
-        description: c.description,
-        isGenerating: false,
-        isEditing: false
-      }));
+      // Check if we have existing characters/locations to match against
+      const hasExistingCharacters = project.characters.length > 0;
+      const hasExistingLocations = project.locations.length > 0;
 
-      // Create new locations from extracted data
-      const newLocations: Location[] = analysis.locations.map(l => ({
-        id: crypto.randomUUID(),
-        name: l.name,
-        description: l.description,
-        isGenerating: false,
-        isEditing: false
-      }));
+      // Create or match characters
+      let workingCharacters = [...project.characters];
+      const characterIdMap: Record<string, string> = {}; // map from extracted name to ID
 
-      // Create shots with character and location linking
+      analysis.characters.forEach(c => {
+        const existingId = matchCharacterByName(c.name, workingCharacters);
+        if (existingId) {
+          // Character already exists, map the name to existing ID
+          characterIdMap[c.name.toLowerCase()] = existingId;
+        } else {
+          // Create new character
+          const newId = crypto.randomUUID();
+          characterIdMap[c.name.toLowerCase()] = newId;
+          workingCharacters.push({
+            id: newId,
+            name: c.name,
+            description: c.description,
+            isGenerating: false,
+            isEditing: false
+          });
+        }
+      });
+
+      // Create or match locations
+      let workingLocations = [...project.locations];
+      const locationIdMap: Record<string, string> = {}; // map from extracted name to ID
+
+      analysis.locations.forEach(l => {
+        const existingId = matchLocationByName(l.name, workingLocations);
+        if (existingId) {
+          // Location already exists, map the name to existing ID
+          locationIdMap[l.name.toLowerCase()] = existingId;
+        } else {
+          // Create new location
+          const newId = crypto.randomUUID();
+          locationIdMap[l.name.toLowerCase()] = newId;
+          workingLocations.push({
+            id: newId,
+            name: l.name,
+            description: l.description,
+            isGenerating: false,
+            isEditing: false
+          });
+        }
+      });
+
+      // Get existing shots count for numbering
+      const existingShotsCount = currentShots.length;
+
+      // Create shots with character and location linking (auto-matched!)
       const newShots: Shot[] = analysis.shots.map((s, idx) => {
         const lines = [];
-        if (s.dialogue) {
-          // Try to find the character by speaker name
-          const speakerChar = newCharacters.find(c =>
-            c.name.toLowerCase() === s.speaker?.toLowerCase()
-          );
+        if (s.dialogue && s.speaker) {
+          // Try to find the character by speaker name in our character map
+          const speakerId = characterIdMap[s.speaker.toLowerCase()] || '';
           lines.push({
             id: crypto.randomUUID(),
-            speakerId: speakerChar?.id || "",
+            speakerId,
             text: s.dialogue
           });
         }
 
+        // Auto-detect characters mentioned in description/action
+        const linkedCharacters: string[] = [];
+        const descLower = (s.description + ' ' + s.action).toLowerCase();
+        Object.entries(characterIdMap).forEach(([name, id]) => {
+          if (descLower.includes(name) && !linkedCharacters.includes(id)) {
+            linkedCharacters.push(id);
+          }
+        });
+
+        // If speaker exists, add them to characters
+        if (s.speaker) {
+          const speakerId = characterIdMap[s.speaker.toLowerCase()];
+          if (speakerId && !linkedCharacters.includes(speakerId)) {
+            linkedCharacters.push(speakerId);
+          }
+        }
+
+        // Try to match location from description
+        let locationId = Object.values(locationIdMap)[0] || workingLocations[0]?.id || '';
+
         return {
           id: crypto.randomUUID(),
-          number: idx + 1,
+          number: existingShotsCount + idx + 1,
           description: s.description || '',
           action: s.action || '',
           dialogueLines: lines,
           shotType: (s.shotType as any) || 'Medium',
           cameraMove: (s.cameraMove as any) || 'Static',
-          characters: [], // Can be linked manually later or auto-detected
-          locationId: newLocations[0]?.id || '', // Default to first location
+          characters: linkedCharacters, // AUTO-LINKED!
+          locationId: locationId, // AUTO-LINKED!
           isGenerating: false,
           isEditing: false,
         };
       });
 
-      // Update project with all extracted data
-      // NOTE: Shots must be added to the ACTIVE SCENE, not the legacy project.shots field
+      // If selection was used, mark that range as analyzed
+      if (selection) {
+        setAnalyzedRanges(prev => [...prev, { start: selection.start, end: selection.end }]);
+      }
+
+      // Update project - add new shots to existing ones (don't replace)
       setProject(prev => ({
         ...prev,
-        characters: newCharacters,
-        locations: newLocations,
+        characters: workingCharacters,
+        locations: workingLocations,
         scenes: prev.scenes?.map(s =>
-          s.id === activeSceneId ? { ...s, shots: newShots, scriptContent: project.scriptContent } : s
+          s.id === activeSceneId ? {
+            ...s,
+            shots: selection ? [...s.shots, ...newShots] : newShots, // Append if selection, replace if full
+            scriptContent: selection ? prev.scriptContent : project.scriptContent
+          } : s
         ) || []
       }));
 
@@ -1245,25 +1360,89 @@ Style: ${project.settings.cinematographer}, shot on ${project.settings.filmStock
               <div className="bg-neutral-900 p-8 rounded-lg border border-neutral-800 shadow-2xl">
                 <div className="flex items-center justify-between mb-4">
                   <h2 className="text-2xl font-serif text-white">Script Input</h2>
-                  <div className="text-xs text-neutral-500 bg-neutral-800 px-2 py-1 rounded">Format: Screenplay or Prose</div>
+                  <div className="flex items-center gap-3">
+                    {analyzedRanges.length > 0 && (
+                      <span className="text-xs text-green-500 bg-green-900/20 px-2 py-1 rounded flex items-center gap-1">
+                        <CheckSquare className="w-3 h-3" />
+                        {analyzedRanges.length} section{analyzedRanges.length > 1 ? 's' : ''} analyzed
+                      </span>
+                    )}
+                    <div className="text-xs text-neutral-500 bg-neutral-800 px-2 py-1 rounded">Format: Screenplay or Prose</div>
+                  </div>
                 </div>
+
+                {/* Selection Indicator */}
+                {selectedText && (
+                  <div className="mb-4 p-3 bg-red-900/20 border border-red-900/30 rounded-md">
+                    <p className="text-xs text-red-400 flex items-center gap-2">
+                      <span className="font-bold">Selected:</span>
+                      {selectedText.length} characters selected
+                      <span className="text-neutral-500">— Click "Analyze Scene" to analyze only this selection</span>
+                    </p>
+                  </div>
+                )}
+
                 <textarea
+                  ref={scriptTextareaRef}
                   className="w-full h-96 bg-black border border-neutral-800 rounded-md p-6 text-neutral-300 font-mono text-sm leading-relaxed focus:ring-1 focus:ring-red-900 outline-none resize-none"
-                  placeholder="EXT. DESERT HIGHWAY - DAY..."
+                  placeholder="EXT. DESERT HIGHWAY - DAY...
+
+TIP: Select (highlight) a portion of text and click 'Analyze Scene' to analyze only that section."
                   value={project.scriptContent}
-                  onChange={(e) => setProject(p => ({ ...p, scriptContent: e.target.value }))}
+                  onChange={(e) => {
+                    setProject(p => ({ ...p, scriptContent: e.target.value }));
+                    // Reset analyzed ranges when content changes significantly
+                    setAnalyzedRanges([]);
+                  }}
+                  onSelect={(e) => {
+                    const textarea = e.target as HTMLTextAreaElement;
+                    const start = textarea.selectionStart;
+                    const end = textarea.selectionEnd;
+                    if (start !== end) {
+                      setSelectedText(project.scriptContent.substring(start, end));
+                    } else {
+                      setSelectedText('');
+                    }
+                  }}
+                  onBlur={() => {
+                    // Keep selection visible for a moment after blur
+                    setTimeout(() => {
+                      if (!scriptTextareaRef.current ||
+                        scriptTextareaRef.current.selectionStart === scriptTextareaRef.current.selectionEnd) {
+                        setSelectedText('');
+                      }
+                    }, 100);
+                  }}
                 />
+
+                {/* Analyzed Ranges Summary */}
+                {analyzedRanges.length > 0 && (
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    {analyzedRanges.map((range, idx) => (
+                      <span key={idx} className="text-xs bg-green-900/30 text-green-400 px-2 py-1 rounded flex items-center gap-1">
+                        ✓ Chars {range.start}-{range.end}
+                      </span>
+                    ))}
+                    <button
+                      onClick={() => setAnalyzedRanges([])}
+                      className="text-xs text-neutral-500 hover:text-red-400 px-2 py-1 transition-colors"
+                    >
+                      Clear markers
+                    </button>
+                  </div>
+                )}
+
                 <div className="mt-6 flex items-center justify-between">
                   {/* Info about what each button does */}
                   <div className="text-xs text-neutral-500 max-w-md">
-                    <span className="text-neutral-400">Analyze Scene:</span> Analyzes current scene only.
+                    <span className="text-neutral-400">Analyze Scene:</span> {selectedText ? <span className="text-red-400">Analyzes SELECTED text only!</span> : 'Analyzes current scene.'}
                     <br />
                     <span className="text-red-400">Full Screenplay:</span> Creates multiple scenes from entire screenplay.
                   </div>
                   <div className="flex gap-3">
                     <Button onClick={handleScriptBreakdown} isLoading={isBreakingDown && !isStandardScreenplayFormat} size="lg" variant="secondary">
                       <Clapperboard className="w-4 h-4 mr-2" />
-                      Analyze Scene
+                      {selectedText ? 'Analyze Selection' : 'Analyze Scene'}
                     </Button>
                     <Button onClick={handleFullScreenplayAnalysis} isLoading={isBreakingDown} size="lg">
                       <Layers className="w-4 h-4 mr-2" />
