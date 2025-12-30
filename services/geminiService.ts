@@ -921,8 +921,25 @@ CRITICAL: This must look like a DIFFERENT CAMERA ANGLE of the SAME SCENE - not a
 
     } else {
       // NO REFERENCE - normal generation with character/location references
+      // IMPORTANT: Include both character AND location references
 
-      // 1. Inject Character Reference Images
+      // 1. Inject Location Reference Image FIRST (sets the scene)
+      if (activeLocation && activeLocation.imageUrl) {
+        parts.push({
+          inlineData: {
+            mimeType: getMimeType(activeLocation.imageUrl),
+            data: stripBase64Header(activeLocation.imageUrl)
+          }
+        });
+        parts.push({
+          text: `REFERENCE_IMAGE_LOCATION: This is the location "${activeLocation.name}". 
+⚠️ CRITICAL: You MUST use this EXACT environment/room for the shot. 
+Match the architecture, furniture, walls, lighting, and atmosphere from this image.
+Do NOT create a different room - use THIS room.`
+        });
+      }
+
+      // 2. Inject Character Reference Images
       activeCharacters.forEach(char => {
         if (char.imageUrl) {
           parts.push({
@@ -931,20 +948,13 @@ CRITICAL: This must look like a DIFFERENT CAMERA ANGLE of the SAME SCENE - not a
               data: stripBase64Header(char.imageUrl)
             }
           });
-          parts.push({ text: `REFERENCE_IMAGE_CHARACTER: This is "${char.name}". Maintain this exact facial structure and costume.` });
+          parts.push({
+            text: `REFERENCE_IMAGE_CHARACTER: This is "${char.name}". 
+⚠️ CRITICAL: You MUST use this EXACT person's face, hair, skin tone, and clothing.
+Do NOT create a different person - use THIS person.`
+          });
         }
       });
-
-      // 2. Inject Location Reference Image
-      if (activeLocation && activeLocation.imageUrl) {
-        parts.push({
-          inlineData: {
-            mimeType: getMimeType(activeLocation.imageUrl),
-            data: stripBase64Header(activeLocation.imageUrl)
-          }
-        });
-        parts.push({ text: `REFERENCE_IMAGE_LOCATION: This is the location "${activeLocation.name}". Maintain this environment.` });
-      }
 
       // Add main prompt for normal generation
       parts.push({ text: mainPromptText });
