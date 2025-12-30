@@ -875,7 +875,8 @@ export const generateShotImage = async (
   try {
     const parts: any[] = [];
 
-    // 0. Inject Scene Reference Shot
+    // 0. Inject Scene Reference Shot - TRUE IMG2IMG EDITING
+    // When a reference shot is set, use it as the BASE IMAGE to edit/alter
     if (referenceShot && referenceShot.imageUrl) {
       parts.push({
         inlineData: {
@@ -883,7 +884,17 @@ export const generateShotImage = async (
           data: stripBase64Header(referenceShot.imageUrl)
         }
       });
-      parts.push({ text: `REFERENCE_SCENE_CONTINUITY: Use this image (Shot #${referenceShot.number}) as the visual guide.` });
+      parts.push({
+        text: `REFERENCE_START_IMAGE: This is the BASE IMAGE to EDIT and TRANSFORM.
+        
+⚠️ CRITICAL IMG2IMG INSTRUCTIONS:
+1. Use THIS image as your starting point - do NOT create a new image from scratch
+2. PRESERVE: The characters' faces, identities, clothing, and the environment/location
+3. MODIFY: Re-frame the shot according to the new Shot Type and Camera Angle specified below
+4. TRANSFORM: Apply the new action, composition, and camera movement while keeping visual consistency
+
+This is image-to-image editing - the output should look like the same scene, same characters, same location, but from the new camera angle/framing specified in the shot details below.`
+      });
     }
 
     // 1. Inject Character Reference Images
