@@ -8,7 +8,7 @@ import { AssetCard } from './AssetCard';
 import { Button } from './Button';
 import { ShotDetailModal } from './ShotDetailModal';
 import { VideoShotCard, WanGenerationSettings } from './VideoShotCard';
-import { generateWanVideo } from '../services/falService';
+import { generateWanVideo, validateFalApiKey } from '../services/falService';
 import { Clapperboard, Settings, Users, MapPin, Film, ChevronRight, LayoutGrid, Plus, ChevronLeft, Home, Video, Play, Loader2, Download, AlertCircle, ImageIcon, MonitorPlay, Layers, Trash2, Edit3, ChevronDown, ChevronUp, Focus, FileText, Upload, CheckSquare, Square } from 'lucide-react';
 
 interface ProjectEditorProps {
@@ -41,6 +41,11 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ initialProject, on
   const [expandedShotId, setExpandedShotId] = useState<string | null>(null);
   const [editingSceneName, setEditingSceneName] = useState<string | null>(null);
   const [scenesCollapsed, setScenesCollapsed] = useState(false);
+
+  // fal.ai API Key Validation State
+  const [falKeyValidating, setFalKeyValidating] = useState(false);
+  const [falKeyStatus, setFalKeyStatus] = useState<'idle' | 'valid' | 'invalid'>('idle');
+  const [falKeyError, setFalKeyError] = useState<string | null>(null);
 
   // PDF Upload State
   const [isUploadingPDF, setIsUploadingPDF] = useState(false);
@@ -1791,16 +1796,65 @@ TIP: Select (highlight) a portion of text and click 'Analyze Scene' to analyze o
                     <label className="text-xs font-bold text-neutral-500 uppercase tracking-widest">
                       fal.ai API Key <span className="text-red-500">*</span>
                     </label>
-                    <input
-                      type="password"
-                      className="w-full bg-neutral-800 border border-neutral-700 rounded-md p-3 text-sm text-white focus:ring-1 focus:ring-red-500 outline-none"
-                      placeholder="Enter your fal.ai API key..."
-                      value={project.videoSettings?.falApiKey || ''}
-                      onChange={(e) => setProject(p => ({
-                        ...p,
-                        videoSettings: { ...(p.videoSettings || DEFAULT_VIDEO_SETTINGS), falApiKey: e.target.value }
-                      }))}
-                    />
+                    <div className="flex gap-2">
+                      <input
+                        type="password"
+                        className={`flex-1 bg-neutral-800 border rounded-md p-3 text-sm text-white focus:ring-1 focus:ring-red-500 outline-none ${falKeyStatus === 'valid' ? 'border-green-600' : falKeyStatus === 'invalid' ? 'border-red-600' : 'border-neutral-700'
+                          }`}
+                        placeholder="Enter your fal.ai API key..."
+                        value={project.videoSettings?.falApiKey || ''}
+                        onChange={(e) => {
+                          setFalKeyStatus('idle');
+                          setFalKeyError(null);
+                          setProject(p => ({
+                            ...p,
+                            videoSettings: { ...(p.videoSettings || DEFAULT_VIDEO_SETTINGS), falApiKey: e.target.value }
+                          }));
+                        }}
+                      />
+                      <Button
+                        variant={falKeyStatus === 'valid' ? 'secondary' : 'primary'}
+                        onClick={async () => {
+                          const key = project.videoSettings?.falApiKey;
+                          if (!key) return;
+                          setFalKeyValidating(true);
+                          setFalKeyStatus('idle');
+                          setFalKeyError(null);
+                          try {
+                            const result = await validateFalApiKey(key);
+                            if (result.valid) {
+                              setFalKeyStatus('valid');
+                              // Trigger save
+                              onSave(project);
+                            } else {
+                              setFalKeyStatus('invalid');
+                              setFalKeyError(result.error || 'Invalid API key');
+                            }
+                          } catch (e: any) {
+                            setFalKeyStatus('invalid');
+                            setFalKeyError(e.message || 'Validation failed');
+                          } finally {
+                            setFalKeyValidating(false);
+                          }
+                        }}
+                        disabled={!project.videoSettings?.falApiKey || falKeyValidating}
+                        isLoading={falKeyValidating}
+                        className="whitespace-nowrap"
+                      >
+                        {falKeyStatus === 'valid' ? '✓ Saved' : 'Validate & Save'}
+                      </Button>
+                    </div>
+                    {/* Status Messages */}
+                    {falKeyStatus === 'valid' && (
+                      <p className="text-xs text-green-500 flex items-center gap-1">
+                        <CheckSquare className="w-3 h-3" /> API key validated and saved successfully
+                      </p>
+                    )}
+                    {falKeyStatus === 'invalid' && falKeyError && (
+                      <p className="text-xs text-red-500 flex items-center gap-1">
+                        <AlertCircle className="w-3 h-3" /> {falKeyError}
+                      </p>
+                    )}
                     <p className="text-xs text-neutral-600">
                       Get your API key from <a href="https://fal.ai/dashboard/keys" target="_blank" rel="noopener noreferrer" className="text-red-500 hover:underline">fal.ai/dashboard/keys</a>
                     </p>

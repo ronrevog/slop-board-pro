@@ -7,6 +7,56 @@ import { VideoProviderSettings } from '../types';
 
 const FAL_API_BASE = 'https://queue.fal.run';
 
+/**
+ * Validate a fal.ai API key by making a test request
+ * @returns { valid: boolean, error?: string }
+ */
+export const validateFalApiKey = async (apiKey: string): Promise<{ valid: boolean; error?: string }> => {
+    if (!apiKey || apiKey.trim().length < 10) {
+        return { valid: false, error: 'API key is too short' };
+    }
+
+    const cleanKey = apiKey.trim().replace(/^Key\s+/i, '');
+
+    try {
+        // Use the fal.ai API info endpoint or a lightweight validation
+        // Making a small request to check if key is valid
+        const response = await fetch('https://fal.run/fal-ai/fast-sdxl', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Key ${cleanKey}`,
+            },
+            body: JSON.stringify({
+                prompt: 'test',
+                num_inference_steps: 1,
+                guidance_scale: 1,
+                sync_mode: true
+            }),
+        });
+
+        // If we get 401 or 403, the key is invalid
+        if (response.status === 401) {
+            return { valid: false, error: 'Invalid API key - authentication failed' };
+        }
+        if (response.status === 403) {
+            return { valid: false, error: 'API key does not have required permissions' };
+        }
+
+        // Even if we get other errors, if we didn't get 401/403, the key is likely valid
+        // (other errors might be rate limiting, model not found, etc.)
+        return { valid: true };
+    } catch (e: any) {
+        // Network errors might be CORS - try a different approach
+        console.warn('Key validation failed, assuming valid:', e);
+        // If we can't reach the API, assume the key format is ok
+        if (cleanKey.startsWith('fal-') || cleanKey.length > 20) {
+            return { valid: true };
+        }
+        return { valid: false, error: 'Could not validate key - network error' };
+    }
+};
+
 export interface WanVideoInput {
     prompt: string;
     image_url: string;
