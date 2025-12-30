@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
-import { analyzeScript, generateShotImage, editImage, generateAssetImage, alterShotImage, generateShotVideo, extendShotVideo, updateAssetWithDetails, generateCoverageShots } from '../services/geminiService';
+import { analyzeScript, analyzeScreenplayPDF, extractTextFromPDF, generateShotImage, editImage, generateAssetImage, alterShotImage, generateShotVideo, extendShotVideo, updateAssetWithDetails, generateCoverageShots } from '../services/geminiService';
 import { Project, Shot, CinematicSettings, Character, Location, VideoSegment, Scene } from '../types';
 import { CINEMATOGRAPHERS, FILM_STOCKS, LENSES, LIGHTING_STYLES, ANAMORPHIC_LENS_PROMPTS } from '../constants';
 import { ShotCard } from './ShotCard';
@@ -8,7 +8,7 @@ import { AssetCard } from './AssetCard';
 import { Button } from './Button';
 import { ShotDetailModal } from './ShotDetailModal';
 import { VideoShotCard } from './VideoShotCard';
-import { Clapperboard, Settings, Users, MapPin, Film, ChevronRight, LayoutGrid, Plus, ChevronLeft, Home, Video, Play, Loader2, Download, AlertCircle, ImageIcon, MonitorPlay, Layers, Trash2, Edit3, ChevronDown, ChevronUp, Focus } from 'lucide-react';
+import { Clapperboard, Settings, Users, MapPin, Film, ChevronRight, LayoutGrid, Plus, ChevronLeft, Home, Video, Play, Loader2, Download, AlertCircle, ImageIcon, MonitorPlay, Layers, Trash2, Edit3, ChevronDown, ChevronUp, Focus, FileText, Upload, CheckSquare, Square } from 'lucide-react';
 
 interface ProjectEditorProps {
   initialProject: Project;
@@ -40,6 +40,11 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ initialProject, on
   const [expandedShotId, setExpandedShotId] = useState<string | null>(null);
   const [editingSceneName, setEditingSceneName] = useState<string | null>(null);
   const [scenesCollapsed, setScenesCollapsed] = useState(false);
+
+  // PDF Upload State
+  const [isUploadingPDF, setIsUploadingPDF] = useState(false);
+  const [isStandardScreenplayFormat, setIsStandardScreenplayFormat] = useState(true);
+  const [pdfFileName, setPdfFileName] = useState<string | null>(null);
 
   // Get the currently active scene
   const activeScene = project.scenes?.find(s => s.id === activeSceneId) || project.scenes?.[0];
@@ -166,16 +171,160 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ initialProject, on
       });
 
       // Update project with all extracted data
+      // NOTE: Shots must be added to the ACTIVE SCENE, not the legacy project.shots field
       setProject(prev => ({
         ...prev,
         characters: newCharacters,
         locations: newLocations,
-        shots: newShots
+        scenes: prev.scenes?.map(s =>
+          s.id === activeSceneId ? { ...s, shots: newShots, scriptContent: project.scriptContent } : s
+        ) || []
       }));
 
       setActiveTab('board');
     } catch (e) {
       console.error(e);
+    } finally {
+      setIsBreakingDown(false);
+    }
+  };
+
+  // --- PDF Upload Handler ---
+  const handlePDFUpload = async (file: File) => {
+    if (!file.name.endsWith('.pdf')) {
+      console.error("Only PDF files are supported");
+      return;
+    }
+
+    setIsUploadingPDF(true);
+    setPdfFileName(file.name);
+
+    try {
+      // Read PDF as base64
+      const reader = new FileReader();
+      const pdfBase64 = await new Promise<string>((resolve, reject) => {
+        reader.onloadend = () => resolve(reader.result as string);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+
+      // Extract text from PDF using Gemini
+      const extractedText = await extractTextFromPDF(pdfBase64);
+
+      // Set the extracted text as the script content
+      setProject(p => ({ ...p, scriptContent: extractedText }));
+
+    } catch (e) {
+      console.error("PDF extraction failed:", e);
+    } finally {
+      setIsUploadingPDF(false);
+    }
+  };
+
+  // --- Full Screenplay Analysis (Multi-Scene) ---
+  const handleFullScreenplayAnalysis = async () => {
+    if (!project.scriptContent.trim()) return;
+    setIsBreakingDown(true);
+
+    try {
+      // Use the multi-scene screenplay analysis with Deep Think
+      const analysis = await analyzeScreenplayPDF(
+        project.scriptContent,
+        project.settings,
+        isStandardScreenplayFormat
+      );
+
+      // Create new characters from extracted data
+      const newCharacters: Character[] = analysis.characters.map(c => ({
+        id: crypto.randomUUID(),
+        name: c.name,
+        description: c.description,
+        isGenerating: false,
+        isEditing: false
+      }));
+
+      // Create new locations from extracted data with ID mapping
+      const locationIdMap: Record<string, string> = {};
+      const newLocations: Location[] = analysis.locations.map(l => {
+        const id = crypto.randomUUID();
+        locationIdMap[l.name.toLowerCase()] = id;
+        return {
+          id,
+          name: l.name,
+          description: l.description,
+          isGenerating: false,
+          isEditing: false
+        };
+      });
+
+      // Create scenes with shots from the analysis
+      const newScenes: Scene[] = analysis.scenes.map((extractedScene, sceneIdx) => {
+        // Find the location ID for this scene
+        const locationId = locationIdMap[extractedScene.locationName?.toLowerCase() || ''] || newLocations[0]?.id || '';
+
+        // Convert shots for this scene
+        const sceneShots: Shot[] = extractedScene.shots.map((s, shotIdx) => {
+          const lines = [];
+          if (s.dialogue) {
+            const speakerChar = newCharacters.find(c =>
+              c.name.toLowerCase() === s.speaker?.toLowerCase()
+            );
+            lines.push({
+              id: crypto.randomUUID(),
+              speakerId: speakerChar?.id || "",
+              text: s.dialogue
+            });
+          }
+
+          return {
+            id: crypto.randomUUID(),
+            number: shotIdx + 1,
+            description: s.description || '',
+            action: s.action || '',
+            dialogueLines: lines,
+            shotType: (s.shotType as any) || 'Medium',
+            cameraMove: (s.cameraMove as any) || 'Static',
+            characters: [],
+            locationId: locationId,
+            isGenerating: false,
+            isEditing: false,
+          };
+        });
+
+        return {
+          id: crypto.randomUUID(),
+          name: extractedScene.name || `Scene ${sceneIdx + 1}`,
+          scriptContent: extractedScene.scriptContent || '',
+          shots: sceneShots,
+          order: sceneIdx
+        };
+      });
+
+      // If no scenes were extracted, create a default one
+      if (newScenes.length === 0) {
+        newScenes.push({
+          id: crypto.randomUUID(),
+          name: 'Scene 1',
+          scriptContent: project.scriptContent,
+          shots: [],
+          order: 0
+        });
+      }
+
+      // Update project with all extracted data
+      setProject(prev => ({
+        ...prev,
+        characters: newCharacters,
+        locations: newLocations,
+        scenes: newScenes
+      }));
+
+      // Set the first scene as active
+      setActiveSceneId(newScenes[0].id);
+      setActiveTab('board');
+
+    } catch (e) {
+      console.error("Screenplay analysis failed:", e);
     } finally {
       setIsBreakingDown(false);
     }
@@ -1032,6 +1181,67 @@ Style: ${project.settings.cinematographer}, shot on ${project.settings.filmStock
         <div className="flex-1 overflow-y-auto p-8 custom-scrollbar">
           {activeTab === 'script' && (
             <div className="max-w-3xl mx-auto space-y-6 animate-fade-in">
+              {/* PDF Upload Section */}
+              <div className="bg-neutral-900 p-6 rounded-lg border border-neutral-800 shadow-xl">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-lg font-serif text-white flex items-center gap-2">
+                    <FileText className="w-5 h-5 text-red-600" />
+                    Upload Screenplay PDF
+                  </h3>
+                  {pdfFileName && (
+                    <span className="text-xs text-green-500 bg-green-900/20 px-2 py-1 rounded">
+                      ✓ {pdfFileName}
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-center gap-4">
+                  <label className="flex-1 cursor-pointer">
+                    <div className={`border-2 border-dashed rounded-lg p-6 text-center transition-all ${isUploadingPDF ? 'border-red-600 bg-red-900/10' : 'border-neutral-700 hover:border-neutral-500 hover:bg-neutral-800/50'}`}>
+                      {isUploadingPDF ? (
+                        <div className="flex items-center justify-center gap-2 text-red-400">
+                          <Loader2 className="w-5 h-5 animate-spin" />
+                          <span>Extracting text from PDF...</span>
+                        </div>
+                      ) : (
+                        <div className="flex flex-col items-center gap-2 text-neutral-400">
+                          <Upload className="w-8 h-8" />
+                          <span className="text-sm">Click to upload or drag & drop</span>
+                          <span className="text-xs text-neutral-600">PDF screenplay files only</span>
+                        </div>
+                      )}
+                    </div>
+                    <input
+                      type="file"
+                      accept=".pdf"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) handlePDFUpload(file);
+                      }}
+                      disabled={isUploadingPDF}
+                    />
+                  </label>
+                </div>
+                {/* Standard Screenplay Format Checkbox */}
+                <div className="mt-4 flex items-center gap-3">
+                  <button
+                    onClick={() => setIsStandardScreenplayFormat(!isStandardScreenplayFormat)}
+                    className="flex items-center gap-2 text-sm text-neutral-300 hover:text-white transition-colors"
+                  >
+                    {isStandardScreenplayFormat ? (
+                      <CheckSquare className="w-5 h-5 text-red-500" />
+                    ) : (
+                      <Square className="w-5 h-5 text-neutral-500" />
+                    )}
+                    Standard Screenplay Format
+                  </button>
+                  <span className="text-xs text-neutral-600">
+                    (INT./EXT. headers, character names in CAPS)
+                  </span>
+                </div>
+              </div>
+
+              {/* Script Text Area */}
               <div className="bg-neutral-900 p-8 rounded-lg border border-neutral-800 shadow-2xl">
                 <div className="flex items-center justify-between mb-4">
                   <h2 className="text-2xl font-serif text-white">Script Input</h2>
@@ -1043,11 +1253,23 @@ Style: ${project.settings.cinematographer}, shot on ${project.settings.filmStock
                   value={project.scriptContent}
                   onChange={(e) => setProject(p => ({ ...p, scriptContent: e.target.value }))}
                 />
-                <div className="mt-6 flex justify-end">
-                  <Button onClick={handleScriptBreakdown} isLoading={isBreakingDown} size="lg">
-                    <Clapperboard className="w-4 h-4 mr-2" />
-                    Analyze & Generate
-                  </Button>
+                <div className="mt-6 flex items-center justify-between">
+                  {/* Info about what each button does */}
+                  <div className="text-xs text-neutral-500 max-w-md">
+                    <span className="text-neutral-400">Analyze Scene:</span> Analyzes current scene only.
+                    <br />
+                    <span className="text-red-400">Full Screenplay:</span> Creates multiple scenes from entire screenplay.
+                  </div>
+                  <div className="flex gap-3">
+                    <Button onClick={handleScriptBreakdown} isLoading={isBreakingDown && !isStandardScreenplayFormat} size="lg" variant="secondary">
+                      <Clapperboard className="w-4 h-4 mr-2" />
+                      Analyze Scene
+                    </Button>
+                    <Button onClick={handleFullScreenplayAnalysis} isLoading={isBreakingDown} size="lg">
+                      <Layers className="w-4 h-4 mr-2" />
+                      Full Screenplay Analysis
+                    </Button>
+                  </div>
                 </div>
               </div>
             </div>

@@ -104,6 +104,19 @@ export interface ScriptAnalysisResult {
   locations: ExtractedLocation[];
 }
 
+export interface ExtractedScene {
+  name: string;
+  scriptContent: string;
+  locationName: string;  // Reference to location name for linking
+  shots: ScriptBreakdownShot[];
+}
+
+export interface ScreenplayAnalysisResult {
+  scenes: ExtractedScene[];
+  characters: ExtractedCharacter[];
+  locations: ExtractedLocation[];
+}
+
 export interface CoverageShotSpec {
   coverageType: string; // e.g. "Master Wide", "OTS A→B", etc.
   description: string;
@@ -391,6 +404,223 @@ export const analyzeScript = async (
     };
   } catch (error) {
     console.error("Script Analysis Error:", error);
+    throw error;
+  }
+};
+
+/**
+ * Analyzes a full screenplay PDF/text and extracts multiple scenes with characters, locations, and shots.
+ * Uses gemini-3-pro-preview with Deep Think for comprehensive screenplay parsing.
+ * @param scriptText - The extracted text from the screenplay (PDF or pasted)
+ * @param settings - Cinematic settings for shot generation
+ * @param isStandardFormat - If true, uses strict screenplay format parsing (INT./EXT. headers, etc.)
+ */
+export const analyzeScreenplayPDF = async (
+  scriptText: string,
+  settings: CinematicSettings,
+  isStandardFormat: boolean = true
+): Promise<ScreenplayAnalysisResult> => {
+  const ai = getAI();
+
+  const formatInstructions = isStandardFormat ? `
+  <screenplay_format_rules>
+  This is a STANDARD SCREENPLAY FORMAT. Parse it using these rules:
+  
+  SCENE HEADERS (SLUG LINES):
+  - Each scene starts with "INT." (Interior) or "EXT." (Exterior)
+  - Format: INT./EXT. LOCATION NAME - TIME OF DAY
+  - Examples: "INT. OVERLOOK HOTEL - LOBBY - DAY", "EXT. MAZE - NIGHT"
+  - Create a NEW SCENE for EVERY scene header you find
+  
+  CHARACTER NAMES:
+  - Character names appear in ALL CAPS when they speak
+  - Parentheticals like (V.O.), (O.S.), (CONT'D) follow the name
+  - Extract every unique character name
+  
+  ACTION LINES:
+  - Descriptions between dialogue blocks
+  - May contain character descriptions, movements, props
+  
+  DIALOGUE:
+  - Appears indented under character names
+  - Parentheticals like (whispering), (angry) may appear
+  </screenplay_format_rules>
+  ` : `
+  <freeform_parsing_rules>
+  This script is NOT in standard screenplay format. Use AI inference to:
+  - Detect scene changes from context (location changes, time jumps, "CUT TO:", etc.)
+  - Identify character names from dialogue attribution or context
+  - Infer locations from descriptions
+  - Do your best to break the text into logical scenes
+  </freeform_parsing_rules>
+  `;
+
+  const prompt = `
+  <role>
+  You are a professional screenplay analyst, script supervisor, and storyboard artist.
+  Your job: Parse this ENTIRE screenplay and extract ALL scenes, characters, locations, and generate shot breakdowns for each scene.
+  </role>
+
+  <input_screenplay>
+  ${scriptText}
+  </input_screenplay>
+
+  ${formatInstructions}
+
+  <cinematic_style>
+  - Director of Photography Style: ${settings.cinematographer}
+  - Film Stock: ${settings.filmStock}
+  - Lenses: ${settings.lens}
+  - Lighting: ${settings.lighting}
+  </cinematic_style>
+
+  <deep_analysis_instructions>
+  ⚠️ CRITICAL: You MUST analyze the ENTIRE screenplay thoroughly.
+  
+  STEP 1 - EXTRACT ALL SCENES:
+  - Find every scene header (INT./EXT.) or scene break
+  - Give each scene a descriptive name (e.g., "Scene 1: INT. HOTEL LOBBY - DAY")
+  - Extract the full script content for each scene
+  - Identify which location each scene takes place in
+  
+  STEP 2 - EXTRACT ALL CHARACTERS:
+  - Find every character who speaks or is mentioned
+  - For speaking characters, extract their name from dialogue headers
+  - Infer physical descriptions from action lines where possible
+  - Note their role/personality if apparent
+  
+  STEP 3 - EXTRACT ALL LOCATIONS:
+  - Create a unique location for each distinct setting
+  - Include time of day, atmosphere, key features
+  - Merge similar locations (e.g., "INT. HOTEL LOBBY" and "INT. HOTEL - LOBBY" are the same)
+  
+  STEP 4 - GENERATE SHOTS PER SCENE:
+  For EACH scene, generate 3-10 shots that cover:
+  - Establishing shot
+  - Coverage for dialogue
+  - Key action moments
+  - Reactions and inserts
+  - Transition out
+  </deep_analysis_instructions>
+
+  <output_format>
+  Return ONLY a valid JSON object with this exact schema:
+  {
+    "characters": [
+      {
+        "name": "CHARACTER NAME",
+        "description": "Physical description, age, clothing, personality traits inferred from script"
+      }
+    ],
+    "locations": [
+      {
+        "name": "Location Name (e.g., Hotel Lobby, Danny's Bedroom, The Maze)",
+        "description": "Detailed environment description: architecture, atmosphere, time of day, key props, lighting"
+      }
+    ],
+    "scenes": [
+      {
+        "name": "Scene 1: INT. LOCATION - TIME",
+        "scriptContent": "The full script text for this scene (dialogue + action lines)",
+        "locationName": "Location Name (must match a location in the locations array)",
+        "shots": [
+          {
+            "description": "Detailed visual composition for this shot",
+            "shotType": "Wide | Medium | Close Up | etc.",
+            "cameraMove": "Static | Dolly In | Pan | etc.",
+            "action": "What happens in this shot",
+            "dialogue": "Spoken line if any",
+            "speaker": "Character name if dialogue"
+          }
+        ]
+      }
+    ]
+  }
+  
+  IMPORTANT:
+  - Create a scene entry for EVERY distinct scene in the screenplay
+  - Each scene's locationName MUST match exactly one location in the locations array
+  - Generate enough shots per scene to cover the key moments (3-10 shots per scene)
+  - Include ALL dialogue in the shots
+  </output_format>
+  `;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-3-pro-preview',
+      contents: prompt,
+      config: {
+        responseMimeType: 'application/json',
+        temperature: 0.7,
+        // Enable Deep Think with extended reasoning budget for full screenplay
+        thinkingConfig: {
+          thinkingBudget: 15000 // Extended budget for full screenplay analysis
+        }
+      }
+    });
+
+    const text = response.text;
+    if (!text) throw new Error("No response from AI");
+
+    const result = JSON.parse(cleanJson(text));
+
+    // Validate and ensure proper structure
+    return {
+      characters: result.characters || [],
+      locations: result.locations || [],
+      scenes: result.scenes || []
+    };
+  } catch (error) {
+    console.error("Screenplay Analysis Error:", error);
+    throw error;
+  }
+};
+
+/**
+ * Extracts text content from a PDF file using Gemini's multimodal capabilities.
+ * @param pdfBase64 - Base64 encoded PDF file
+ */
+export const extractTextFromPDF = async (pdfBase64: string): Promise<string> => {
+  const ai = getAI();
+
+  // Strip the data URI prefix if present
+  const base64Data = pdfBase64.replace(/^data:application\/pdf;base64,/, "");
+
+  const prompt = `Extract ALL text content from this PDF document. 
+  Preserve the formatting as much as possible, including:
+  - Scene headers (INT./EXT. lines)
+  - Character names in caps
+  - Dialogue indentation
+  - Action lines
+  - Page breaks (indicate with "---")
+  
+  Return the complete text content of the screenplay.`;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-3-pro-preview',
+      contents: {
+        parts: [
+          {
+            inlineData: {
+              mimeType: 'application/pdf',
+              data: base64Data
+            }
+          },
+          { text: prompt }
+        ]
+      },
+      config: {
+        temperature: 0.1 // Low temperature for accurate extraction
+      }
+    });
+
+    const text = response.text;
+    if (!text) throw new Error("No text extracted from PDF");
+
+    return text;
+  } catch (error) {
+    console.error("PDF Extraction Error:", error);
     throw error;
   }
 };
