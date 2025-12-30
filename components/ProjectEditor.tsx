@@ -7,7 +7,8 @@ import { ShotCard } from './ShotCard';
 import { AssetCard } from './AssetCard';
 import { Button } from './Button';
 import { ShotDetailModal } from './ShotDetailModal';
-import { VideoShotCard } from './VideoShotCard';
+import { VideoShotCard, WanGenerationSettings } from './VideoShotCard';
+import { generateWanVideo } from '../services/falService';
 import { Clapperboard, Settings, Users, MapPin, Film, ChevronRight, LayoutGrid, Plus, ChevronLeft, Home, Video, Play, Loader2, Download, AlertCircle, ImageIcon, MonitorPlay, Layers, Trash2, Edit3, ChevronDown, ChevronUp, Focus, FileText, Upload, CheckSquare, Square } from 'lucide-react';
 
 interface ProjectEditorProps {
@@ -1161,6 +1162,69 @@ Style: ${project.settings.cinematographer}, shot on ${project.settings.filmStock
     updateShot(shotId, { imageUrl: imageDataUrl });
   };
 
+  // --- Wan v2.6 Video Generation ---
+  const handleGenerateWanVideo = async (shotId: string, wanSettings: WanGenerationSettings) => {
+    if (!activeSceneId) return;
+    const shot = currentShots.find(s => s.id === shotId);
+    if (!shot || !shot.imageUrl) return;
+
+    const videoSettings = project.videoSettings || DEFAULT_VIDEO_SETTINGS;
+    if (!videoSettings.falApiKey) {
+      console.error('fal.ai API key not configured');
+      updateSceneShots(activeSceneId, shots =>
+        shots.map(s => s.id === shotId ? { ...s, videoError: 'fal.ai API key not configured. Go to Settings tab.' } : s)
+      );
+      return;
+    }
+
+    updateSceneShots(activeSceneId, shots =>
+      shots.map(s => s.id === shotId ? { ...s, isVideoGenerating: true, videoError: undefined } : s)
+    );
+
+    try {
+      const promptToUse = shot.videoPrompt || synthesizeVideoPrompt(shot);
+
+      // Convert WanGenerationSettings to VideoProviderSettings format for the service
+      const settings: VideoProviderSettings = {
+        ...videoSettings,
+        wanResolution: wanSettings.resolution,
+        wanDuration: wanSettings.duration,
+        wanEnablePromptExpansion: wanSettings.enablePromptExpansion,
+        wanMultiShots: wanSettings.multiShots,
+        wanEnableSafetyChecker: wanSettings.enableSafetyChecker,
+        wanNegativePrompt: wanSettings.negativePrompt,
+        wanSeed: wanSettings.seed,
+        wanAudioUrl: wanSettings.audioUrl
+      };
+
+      const videoUrl = await generateWanVideo(shot.imageUrl, promptToUse, settings);
+
+      const newSegment: VideoSegment = {
+        id: crypto.randomUUID(),
+        url: videoUrl,
+        timestamp: Date.now(),
+        model: 'quality', // Wan doesn't have fast/quality distinction
+        isExtension: false
+      };
+
+      updateSceneShots(activeSceneId, shots =>
+        shots.map(s => s.id === shotId ? {
+          ...s,
+          isVideoGenerating: false,
+          videoUrl,
+          videoSegments: [newSegment],
+          videoError: undefined
+        } : s)
+      );
+    } catch (e: any) {
+      console.error('Wan video generation failed:', e);
+      const errorMessage = e.message || 'Wan video generation failed';
+      updateSceneShots(activeSceneId, shots =>
+        shots.map(s => s.id === shotId ? { ...s, isVideoGenerating: false, videoError: errorMessage } : s)
+      );
+    }
+  };
+
   return (
     <div className="flex h-screen overflow-hidden bg-neutral-950 text-neutral-200 animate-fade-in">
 
@@ -1664,8 +1728,10 @@ TIP: Select (highlight) a portion of text and click 'Analyze Scene' to analyze o
                     shot={shot}
                     sceneName={activeScene?.name}
                     videoModelLabel={`Veo ${shot.videoModel === 'quality' ? 'Quality' : 'Fast'} Model`}
+                    projectVideoSettings={project.videoSettings}
                     onUpdatePrompt={handleUpdateVideoPrompt}
                     onGenerate={handleGenerateVideo}
+                    onGenerateWan={handleGenerateWanVideo}
                     onExtend={handleExtendVideo}
                     onDownload={handleDownloadVideo}
                     onCaptureFrame={handleCaptureFrame}

@@ -1,15 +1,28 @@
 
 import React, { useState, useRef } from 'react';
-import { Shot, VideoSegment } from '../types';
+import { Shot, VideoSegment, VideoProviderSettings, DEFAULT_VIDEO_SETTINGS } from '../types';
 import { Button } from './Button';
-import { Download, Loader2, Clapperboard, Video, ImageIcon, MonitorPlay, RefreshCw, Film, Play, AlertTriangle, X, Camera } from 'lucide-react';
+import { Download, Loader2, Clapperboard, Video, ImageIcon, MonitorPlay, RefreshCw, Film, Play, AlertTriangle, X, Camera, Settings, ChevronDown, ChevronUp, CheckSquare, Square } from 'lucide-react';
+
+export interface WanGenerationSettings {
+  resolution: '720p' | '1080p';
+  duration: '5' | '10' | '15';
+  enablePromptExpansion: boolean;
+  multiShots: boolean;
+  enableSafetyChecker: boolean;
+  negativePrompt: string;
+  seed?: number;
+  audioUrl?: string;
+}
 
 interface VideoShotCardProps {
   shot: Shot;
   sceneName?: string;
   videoModelLabel: string;
+  projectVideoSettings?: VideoProviderSettings;
   onUpdatePrompt: (id: string, prompt: string) => void;
   onGenerate: (id: string, model: 'fast' | 'quality') => void;
+  onGenerateWan: (id: string, settings: WanGenerationSettings) => void;
   onExtend: (id: string, model: 'fast' | 'quality') => void;
   onDownload: (shot: Shot, sceneName?: string) => void;
   onCaptureFrame: (id: string, imageDataUrl: string) => void;
@@ -20,8 +33,10 @@ export const VideoShotCard: React.FC<VideoShotCardProps> = ({
   shot,
   sceneName,
   videoModelLabel,
+  projectVideoSettings,
   onUpdatePrompt,
   onGenerate,
+  onGenerateWan,
   onExtend,
   onDownload,
   onCaptureFrame,
@@ -38,6 +53,26 @@ export const VideoShotCard: React.FC<VideoShotCardProps> = ({
 
   // Feedback state for capture
   const [captureStatus, setCaptureStatus] = useState<'idle' | 'success' | 'error'>('idle');
+
+  // Provider selection state per-shot (defaults to project setting or 'veo')
+  const [selectedProvider, setSelectedProvider] = useState<'veo' | 'wan'>(
+    projectVideoSettings?.provider === 'fal-wan' ? 'wan' : 'veo'
+  );
+
+  // Wan settings state (initialized from project settings)
+  const [wanSettings, setWanSettings] = useState<WanGenerationSettings>({
+    resolution: projectVideoSettings?.wanResolution || '1080p',
+    duration: projectVideoSettings?.wanDuration || '5',
+    enablePromptExpansion: projectVideoSettings?.wanEnablePromptExpansion ?? true,
+    multiShots: projectVideoSettings?.wanMultiShots ?? false,
+    enableSafetyChecker: projectVideoSettings?.wanEnableSafetyChecker ?? true,
+    negativePrompt: projectVideoSettings?.wanNegativePrompt || '',
+    seed: projectVideoSettings?.wanSeed,
+    audioUrl: projectVideoSettings?.wanAudioUrl || ''
+  });
+
+  // Show/hide Wan settings panel
+  const [showWanSettings, setShowWanSettings] = useState(false);
 
   // Capture current video frame as image
   const handleCaptureFrame = () => {
@@ -340,31 +375,197 @@ export const VideoShotCard: React.FC<VideoShotCardProps> = ({
           )}
 
           <div className="space-y-3 pt-6 border-t border-neutral-800">
+            {/* Provider Selection */}
             <div className="space-y-2">
               <label className="text-xs font-bold text-neutral-400 uppercase tracking-widest flex items-center gap-2">
-                <Video className="w-3 h-3" /> Generate Video
+                <Video className="w-3 h-3" /> Video Provider
               </label>
-              <div className="grid grid-cols-2 gap-3">
-                <Button
-                  variant="secondary"
-                  onClick={() => onGenerate(shot.id, 'fast')}
-                  disabled={shot.isVideoGenerating || shot.isExtending || !shot.imageUrl}
-                  className="h-12"
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  onClick={() => setSelectedProvider('veo')}
+                  className={`px-3 py-2 rounded-lg border-2 text-sm font-medium transition-all ${selectedProvider === 'veo'
+                    ? 'border-red-600 bg-red-900/20 text-white'
+                    : 'border-neutral-700 bg-neutral-800/50 text-neutral-400 hover:border-neutral-500'
+                    }`}
                 >
-                  {shot.videoUrl ? 'Regenerate Fast' : 'Veo Fast'}
-                </Button>
-                <Button
-                  variant="primary"
-                  onClick={() => onGenerate(shot.id, 'quality')}
-                  disabled={shot.isVideoGenerating || shot.isExtending || !shot.imageUrl}
-                  className="h-12"
+                  Veo (Google)
+                </button>
+                <button
+                  onClick={() => setSelectedProvider('wan')}
+                  className={`px-3 py-2 rounded-lg border-2 text-sm font-medium transition-all ${selectedProvider === 'wan'
+                    ? 'border-orange-600 bg-orange-900/20 text-white'
+                    : 'border-neutral-700 bg-neutral-800/50 text-neutral-400 hover:border-neutral-500'
+                    }`}
                 >
-                  {shot.videoUrl ? 'Regenerate Quality' : 'Veo Quality'}
-                </Button>
+                  Wan v2.6 (fal.ai)
+                </button>
               </div>
             </div>
 
-            {shot.videoUrl && (
+            {/* Veo Generate Buttons */}
+            {selectedProvider === 'veo' && (
+              <div className="space-y-2 animate-fade-in">
+                <div className="grid grid-cols-2 gap-3">
+                  <Button
+                    variant="secondary"
+                    onClick={() => onGenerate(shot.id, 'fast')}
+                    disabled={shot.isVideoGenerating || shot.isExtending || !shot.imageUrl}
+                    className="h-12"
+                  >
+                    {shot.videoUrl ? 'Regen Fast' : 'Veo Fast'}
+                  </Button>
+                  <Button
+                    variant="primary"
+                    onClick={() => onGenerate(shot.id, 'quality')}
+                    disabled={shot.isVideoGenerating || shot.isExtending || !shot.imageUrl}
+                    className="h-12"
+                  >
+                    {shot.videoUrl ? 'Regen Quality' : 'Veo Quality'}
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {/* Wan v2.6 Settings & Generate */}
+            {selectedProvider === 'wan' && (
+              <div className="space-y-3 animate-fade-in">
+                {/* Wan Settings Toggle */}
+                <button
+                  onClick={() => setShowWanSettings(!showWanSettings)}
+                  className="w-full flex items-center justify-between px-3 py-2 bg-neutral-800/50 border border-neutral-700 rounded-lg text-sm text-neutral-300 hover:bg-neutral-800 transition-colors"
+                >
+                  <span className="flex items-center gap-2">
+                    <Settings className="w-3 h-3" /> Wan v2.6 Settings
+                  </span>
+                  {showWanSettings ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                </button>
+
+                {/* Wan Settings Panel */}
+                {showWanSettings && (
+                  <div className="bg-neutral-800/30 border border-neutral-700 rounded-lg p-3 space-y-3 animate-fade-in">
+                    {/* Resolution & Duration Row */}
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="space-y-1">
+                        <label className="text-[10px] text-neutral-500 uppercase">Resolution</label>
+                        <select
+                          className="w-full bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs text-white"
+                          value={wanSettings.resolution}
+                          onChange={(e) => setWanSettings(s => ({ ...s, resolution: e.target.value as '720p' | '1080p' }))}
+                        >
+                          <option value="720p">720p</option>
+                          <option value="1080p">1080p</option>
+                        </select>
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-[10px] text-neutral-500 uppercase">Duration</label>
+                        <select
+                          className="w-full bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs text-white"
+                          value={wanSettings.duration}
+                          onChange={(e) => setWanSettings(s => ({ ...s, duration: e.target.value as '5' | '10' | '15' }))}
+                        >
+                          <option value="5">5 sec</option>
+                          <option value="10">10 sec</option>
+                          <option value="15">15 sec</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    {/* Checkboxes */}
+                    <div className="space-y-2">
+                      <button
+                        onClick={() => setWanSettings(s => ({ ...s, enablePromptExpansion: !s.enablePromptExpansion }))}
+                        className="flex items-center gap-2 text-xs text-neutral-300 hover:text-white transition-colors w-full"
+                      >
+                        {wanSettings.enablePromptExpansion ? (
+                          <CheckSquare className="w-4 h-4 text-orange-500" />
+                        ) : (
+                          <Square className="w-4 h-4 text-neutral-500" />
+                        )}
+                        Prompt Expansion
+                      </button>
+                      <button
+                        onClick={() => setWanSettings(s => ({ ...s, multiShots: !s.multiShots }))}
+                        className="flex items-center gap-2 text-xs text-neutral-300 hover:text-white transition-colors w-full"
+                      >
+                        {wanSettings.multiShots ? (
+                          <CheckSquare className="w-4 h-4 text-orange-500" />
+                        ) : (
+                          <Square className="w-4 h-4 text-neutral-500" />
+                        )}
+                        Multi-Shots
+                      </button>
+                      <button
+                        onClick={() => setWanSettings(s => ({ ...s, enableSafetyChecker: !s.enableSafetyChecker }))}
+                        className="flex items-center gap-2 text-xs text-neutral-300 hover:text-white transition-colors w-full"
+                      >
+                        {wanSettings.enableSafetyChecker ? (
+                          <CheckSquare className="w-4 h-4 text-orange-500" />
+                        ) : (
+                          <Square className="w-4 h-4 text-neutral-500" />
+                        )}
+                        Safety Checker
+                      </button>
+                    </div>
+
+                    {/* Negative Prompt */}
+                    <div className="space-y-1">
+                      <label className="text-[10px] text-neutral-500 uppercase">Negative Prompt</label>
+                      <input
+                        type="text"
+                        className="w-full bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs text-white placeholder-neutral-600"
+                        placeholder="low quality, blurry..."
+                        value={wanSettings.negativePrompt}
+                        onChange={(e) => setWanSettings(s => ({ ...s, negativePrompt: e.target.value }))}
+                      />
+                    </div>
+
+                    {/* Seed */}
+                    <div className="space-y-1">
+                      <label className="text-[10px] text-neutral-500 uppercase">Seed (optional)</label>
+                      <input
+                        type="number"
+                        className="w-full bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs text-white placeholder-neutral-600"
+                        placeholder="Random"
+                        value={wanSettings.seed || ''}
+                        onChange={(e) => setWanSettings(s => ({ ...s, seed: e.target.value ? parseInt(e.target.value) : undefined }))}
+                      />
+                    </div>
+
+                    {/* Audio URL */}
+                    <div className="space-y-1">
+                      <label className="text-[10px] text-neutral-500 uppercase">Audio URL (optional)</label>
+                      <input
+                        type="url"
+                        className="w-full bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs text-white placeholder-neutral-600"
+                        placeholder="https://..."
+                        value={wanSettings.audioUrl || ''}
+                        onChange={(e) => setWanSettings(s => ({ ...s, audioUrl: e.target.value }))}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {/* API Key Warning */}
+                {!projectVideoSettings?.falApiKey && (
+                  <div className="text-xs text-orange-400 bg-orange-900/20 border border-orange-900/30 rounded px-2 py-1">
+                    ⚠️ Add fal.ai API key in Project Settings
+                  </div>
+                )}
+
+                {/* Generate Button */}
+                <Button
+                  variant="primary"
+                  onClick={() => onGenerateWan(shot.id, wanSettings)}
+                  disabled={shot.isVideoGenerating || shot.isExtending || !shot.imageUrl || !projectVideoSettings?.falApiKey}
+                  className="w-full h-12 bg-orange-600 hover:bg-orange-700"
+                >
+                  {shot.videoUrl ? `Regenerate (${wanSettings.duration}s)` : `Generate Wan (${wanSettings.duration}s)`}
+                </Button>
+              </div>
+            )}
+
+            {/* Extend Video - Only for Veo */}
+            {shot.videoUrl && selectedProvider === 'veo' && (
               <div className="space-y-2 pt-4 border-t border-neutral-800 animate-fade-in">
                 <label className="text-xs font-bold text-neutral-400 uppercase tracking-widest flex items-center gap-2">
                   <MonitorPlay className="w-3 h-3" /> Extend Video
