@@ -1,7 +1,7 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Shot, Character, Location } from '../types';
-import { Camera, RefreshCw, SendHorizontal, MessageSquare, MapPin, Users, Edit3, Trash2, Upload, Download, Maximize2, Wand2, Plus, X, Link, Copy, Focus } from 'lucide-react';
+import { Shot, Character, Location, ImageHistoryEntry } from '../types';
+import { Camera, RefreshCw, SendHorizontal, MessageSquare, MapPin, Users, Edit3, Trash2, Upload, Download, Maximize2, Wand2, Plus, X, Link, Copy, Focus, History, RotateCcw } from 'lucide-react';
 import { Button } from './Button';
 
 interface ShotCardProps {
@@ -19,6 +19,7 @@ interface ShotCardProps {
   onExpand: (id: string) => void;
   onDuplicate: (id: string) => void;
   onCoverageFromImage?: (id: string) => void;
+  onRestoreFromHistory?: (shotId: string, entry: ImageHistoryEntry) => void;
   isCoverageGenerating?: boolean;
 }
 
@@ -37,10 +38,12 @@ export const ShotCard: React.FC<ShotCardProps> = ({
   onExpand,
   onDuplicate,
   onCoverageFromImage,
+  onRestoreFromHistory,
   isCoverageGenerating
 }) => {
   const [editPrompt, setEditPrompt] = useState('');
   const [deleteConfirm, setDeleteConfirm] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -216,6 +219,67 @@ export const ShotCard: React.FC<ShotCardProps> = ({
           <div className="absolute bottom-2 right-2 bg-neutral-900/80 backdrop-blur text-white text-[10px] px-2 py-1 rounded flex items-center gap-1 border border-neutral-700">
             <Link className="w-3 h-3 text-blue-400" />
             Ref: #{allShots.find(s => s.id === shot.referenceShotId)?.number}
+          </div>
+        )}
+
+        {/* History Badge - Click to toggle history panel */}
+        {shot.imageHistory && shot.imageHistory.length > 0 && (
+          <button
+            onClick={() => setShowHistory(!showHistory)}
+            className={`absolute top-2 left-2 z-20 px-2 py-1 rounded flex items-center gap-1 text-[10px] transition-all ${showHistory
+              ? 'bg-blue-600 text-white'
+              : 'bg-neutral-900/80 backdrop-blur text-neutral-400 hover:text-white border border-neutral-700'
+              }`}
+            title={`${shot.imageHistory.length} previous version${shot.imageHistory.length > 1 ? 's' : ''}`}
+          >
+            <History className="w-3 h-3" />
+            {shot.imageHistory.length}
+          </button>
+        )}
+
+        {/* History Panel - Shows previous versions */}
+        {showHistory && shot.imageHistory && shot.imageHistory.length > 0 && (
+          <div className="absolute bottom-0 left-0 right-0 bg-neutral-900/95 backdrop-blur-md border-t border-neutral-700 z-30 p-2">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-[10px] text-neutral-400 uppercase tracking-widest font-bold flex items-center gap-1">
+                <History className="w-3 h-3" /> Version History
+              </span>
+              <button
+                onClick={() => setShowHistory(false)}
+                className="text-neutral-500 hover:text-white p-0.5"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            </div>
+            <div className="flex gap-2 overflow-x-auto custom-scrollbar pb-1">
+              {[...shot.imageHistory].reverse().map((entry, idx) => (
+                <div
+                  key={entry.id}
+                  className="relative flex-shrink-0 group/history cursor-pointer"
+                  onClick={() => {
+                    if (onRestoreFromHistory) {
+                      onRestoreFromHistory(shot.id, entry);
+                      setShowHistory(false);
+                    }
+                  }}
+                  title={`${new Date(entry.timestamp).toLocaleString()} - ${entry.source}`}
+                >
+                  <img
+                    src={entry.imageUrl}
+                    alt={`Version ${shot.imageHistory!.length - idx}`}
+                    className="w-16 h-10 object-cover rounded border border-neutral-700 hover:border-blue-500 transition-colors"
+                  />
+                  {/* Restore overlay */}
+                  <div className="absolute inset-0 bg-blue-600/80 opacity-0 group-hover/history:opacity-100 transition-opacity flex items-center justify-center rounded">
+                    <RotateCcw className="w-3 h-3 text-white" />
+                  </div>
+                  {/* Source badge */}
+                  <div className="absolute bottom-0 left-0 right-0 bg-black/70 text-[8px] text-center text-neutral-300 rounded-b py-0.5">
+                    {entry.source === 'generate' ? 'Gen' : entry.source === 'alter' ? 'Alt' : entry.source === 'edit' ? 'Edit' : 'Up'}
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         )}
 

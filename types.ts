@@ -87,6 +87,13 @@ export interface VideoSegment {
   isExtension: boolean; // true if this segment was created by extending
 }
 
+export interface ImageHistoryEntry {
+  id: string;
+  imageUrl: string; // Base64
+  timestamp: number;
+  source: 'generate' | 'alter' | 'edit' | 'upload'; // How this image was created
+}
+
 export interface Shot {
   id: string;
   number: number;
@@ -99,6 +106,7 @@ export interface Shot {
   locationId: string;
   referenceShotId?: string; // ID of another shot to use as visual reference
   imageUrl?: string; // Base64
+  imageHistory?: ImageHistoryEntry[]; // Version history of images
   videoUrl?: string; // Base64 or Blob URL
   videoSegments?: VideoSegment[]; // Array of video segments in order (for stringout)
   videoPrompt?: string; // The specific prompt used/to-be-used for video generation

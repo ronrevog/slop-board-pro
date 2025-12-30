@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { analyzeScript, analyzeScreenplayPDF, extractTextFromPDF, generateShotImage, editImage, generateAssetImage, alterShotImage, generateShotVideo, extendShotVideo, updateAssetWithDetails, generateCoverageShots } from '../services/geminiService';
-import { Project, Shot, CinematicSettings, Character, Location, VideoSegment, Scene } from '../types';
+import { Project, Shot, CinematicSettings, Character, Location, VideoSegment, Scene, ImageHistoryEntry } from '../types';
 import { CINEMATOGRAPHERS, FILM_STOCKS, LENSES, LIGHTING_STYLES, ANAMORPHIC_LENS_PROMPTS } from '../constants';
 import { ShotCard } from './ShotCard';
 import { AssetCard } from './AssetCard';
@@ -516,6 +516,20 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ initialProject, on
     updateSceneShots(activeSceneId, shots => [...shots, newShot]);
   };
 
+  // Helper to add image to history before replacing
+  const addToImageHistory = (shot: Shot, source: ImageHistoryEntry['source']): ImageHistoryEntry[] => {
+    if (!shot.imageUrl) return shot.imageHistory || [];
+    const newEntry: ImageHistoryEntry = {
+      id: crypto.randomUUID(),
+      imageUrl: shot.imageUrl,
+      timestamp: Date.now(),
+      source
+    };
+    const existingHistory = shot.imageHistory || [];
+    // Keep max 10 history entries per shot
+    return [...existingHistory, newEntry].slice(-10);
+  };
+
   const handleGenerateShot = async (shotId: string) => {
     if (!activeSceneId) return;
     updateSceneShots(activeSceneId, shots =>
@@ -528,8 +542,11 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ initialProject, on
 
       const imageUrl = await generateShotImage(shot, project.settings, project.characters, project.locations, currentShots);
 
+      // Save current image to history before replacing
+      const updatedHistory = addToImageHistory(shot, 'generate');
+
       updateSceneShots(activeSceneId, shots =>
-        shots.map(s => s.id === shotId ? { ...s, isGenerating: false, imageUrl } : s)
+        shots.map(s => s.id === shotId ? { ...s, isGenerating: false, imageUrl, imageHistory: updatedHistory } : s)
       );
     } catch (e) {
       console.error(e);
@@ -551,8 +568,11 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ initialProject, on
 
       const imageUrl = await alterShotImage(shot, project.settings, project.characters, project.locations, currentShots);
 
+      // Save current image to history before replacing
+      const updatedHistory = addToImageHistory(shot, 'alter');
+
       updateSceneShots(activeSceneId, shots =>
-        shots.map(s => s.id === shotId ? { ...s, isAltering: false, imageUrl } : s)
+        shots.map(s => s.id === shotId ? { ...s, isAltering: false, imageUrl, imageHistory: updatedHistory } : s)
       );
     } catch (e) {
       console.error(e);
@@ -574,8 +594,11 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ initialProject, on
 
       const newImageUrl = await editImage(shot.imageUrl, prompt);
 
+      // Save current image to history before replacing
+      const updatedHistory = addToImageHistory(shot, 'edit');
+
       updateSceneShots(activeSceneId, shots =>
-        shots.map(s => s.id === shotId ? { ...s, isEditing: false, imageUrl: newImageUrl } : s)
+        shots.map(s => s.id === shotId ? { ...s, isEditing: false, imageUrl: newImageUrl, imageHistory: updatedHistory } : s)
       );
     } catch (e) {
       console.error(e);
@@ -590,11 +613,30 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ initialProject, on
     const reader = new FileReader();
     reader.onloadend = () => {
       const base64 = reader.result as string;
+      const shot = currentShots.find(s => s.id === shotId);
+
+      // Save current image to history before replacing
+      const updatedHistory = shot ? addToImageHistory(shot, 'upload') : [];
+
       updateSceneShots(activeSceneId, shots =>
-        shots.map(s => s.id === shotId ? { ...s, imageUrl: base64 } : s)
+        shots.map(s => s.id === shotId ? { ...s, imageUrl: base64, imageHistory: updatedHistory } : s)
       );
     };
     reader.readAsDataURL(file);
+  };
+
+  // Restore image from history
+  const handleRestoreFromHistory = (shotId: string, historyEntry: ImageHistoryEntry) => {
+    if (!activeSceneId) return;
+    const shot = currentShots.find(s => s.id === shotId);
+    if (!shot) return;
+
+    // Save current image to history first
+    const updatedHistory = addToImageHistory(shot, 'generate');
+
+    updateSceneShots(activeSceneId, shots =>
+      shots.map(s => s.id === shotId ? { ...s, imageUrl: historyEntry.imageUrl, imageHistory: updatedHistory } : s)
+    );
   };
 
   const updateShot = (id: string, updates: Partial<Shot>) => {
@@ -1600,6 +1642,7 @@ TIP: Select (highlight) a portion of text and click 'Analyze Scene' to analyze o
                       onExpand={setExpandedShotId}
                       onDuplicate={handleDuplicateShot}
                       onCoverageFromImage={handleGenerateCoverageFromImage}
+                      onRestoreFromHistory={handleRestoreFromHistory}
                       isCoverageGenerating={coverageSourceShotId === shot.id}
                     />
                   ))}
