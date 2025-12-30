@@ -1382,38 +1382,88 @@ Style: ${project.settings.cinematographer}, shot on ${project.settings.filmStock
                   </div>
                 )}
 
-                <textarea
-                  ref={scriptTextareaRef}
-                  className="w-full h-96 bg-black border border-neutral-800 rounded-md p-6 text-neutral-300 font-mono text-sm leading-relaxed focus:ring-1 focus:ring-red-900 outline-none resize-none"
-                  placeholder="EXT. DESERT HIGHWAY - DAY...
+                {/* Script Editor with Highlighting */}
+                <div className="relative w-full h-96">
+                  {/* Highlighted Background Layer - shows analyzed text in green */}
+                  {analyzedRanges.length > 0 && (
+                    <div
+                      className="absolute inset-0 bg-black border border-neutral-800 rounded-md p-6 font-mono text-sm leading-relaxed overflow-hidden pointer-events-none whitespace-pre-wrap break-words"
+                      aria-hidden="true"
+                    >
+                      {(() => {
+                        // Sort ranges by start position
+                        const sortedRanges = [...analyzedRanges].sort((a, b) => a.start - b.start);
+                        const content = project.scriptContent;
+                        const elements: React.ReactNode[] = [];
+                        let lastEnd = 0;
+
+                        sortedRanges.forEach((range, idx) => {
+                          // Add text before this range (invisible, just for spacing)
+                          if (range.start > lastEnd) {
+                            elements.push(
+                              <span key={`before-${idx}`} className="text-transparent">
+                                {content.substring(lastEnd, range.start)}
+                              </span>
+                            );
+                          }
+                          // Add the highlighted range
+                          elements.push(
+                            <span key={`range-${idx}`} className="text-green-400 bg-green-900/30 rounded">
+                              {content.substring(range.start, range.end)}
+                            </span>
+                          );
+                          lastEnd = range.end;
+                        });
+
+                        // Add remaining text (invisible)
+                        if (lastEnd < content.length) {
+                          elements.push(
+                            <span key="after" className="text-transparent">
+                              {content.substring(lastEnd)}
+                            </span>
+                          );
+                        }
+
+                        return elements;
+                      })()}
+                    </div>
+                  )}
+
+                  {/* Actual Textarea - sits on top */}
+                  <textarea
+                    ref={scriptTextareaRef}
+                    className={`absolute inset-0 w-full h-full border border-neutral-800 rounded-md p-6 font-mono text-sm leading-relaxed focus:ring-1 focus:ring-red-900 outline-none resize-none ${analyzedRanges.length > 0 ? 'bg-transparent text-neutral-300 caret-white' : 'bg-black text-neutral-300'
+                      }`}
+                    placeholder="EXT. DESERT HIGHWAY - DAY...
 
 TIP: Select (highlight) a portion of text and click 'Analyze Scene' to analyze only that section."
-                  value={project.scriptContent}
-                  onChange={(e) => {
-                    setProject(p => ({ ...p, scriptContent: e.target.value }));
-                    // Reset analyzed ranges when content changes significantly
-                    setAnalyzedRanges([]);
-                  }}
-                  onSelect={(e) => {
-                    const textarea = e.target as HTMLTextAreaElement;
-                    const start = textarea.selectionStart;
-                    const end = textarea.selectionEnd;
-                    if (start !== end) {
-                      setSelectedText(project.scriptContent.substring(start, end));
-                    } else {
-                      setSelectedText('');
-                    }
-                  }}
-                  onBlur={() => {
-                    // Keep selection visible for a moment after blur
-                    setTimeout(() => {
-                      if (!scriptTextareaRef.current ||
-                        scriptTextareaRef.current.selectionStart === scriptTextareaRef.current.selectionEnd) {
+                    value={project.scriptContent}
+                    onChange={(e) => {
+                      setProject(p => ({ ...p, scriptContent: e.target.value }));
+                      // Reset analyzed ranges when content changes significantly
+                      setAnalyzedRanges([]);
+                    }}
+                    onSelect={(e) => {
+                      const textarea = e.target as HTMLTextAreaElement;
+                      const start = textarea.selectionStart;
+                      const end = textarea.selectionEnd;
+                      if (start !== end) {
+                        setSelectedText(project.scriptContent.substring(start, end));
+                      } else {
                         setSelectedText('');
                       }
-                    }, 100);
-                  }}
-                />
+                    }}
+                    onBlur={() => {
+                      // Keep selection visible for a moment after blur
+                      setTimeout(() => {
+                        if (!scriptTextareaRef.current ||
+                          scriptTextareaRef.current.selectionStart === scriptTextareaRef.current.selectionEnd) {
+                          setSelectedText('');
+                        }
+                      }, 100);
+                    }}
+                  />
+                </div>
 
                 {/* Analyzed Ranges Summary */}
                 {analyzedRanges.length > 0 && (
