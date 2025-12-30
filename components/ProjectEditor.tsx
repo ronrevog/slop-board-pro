@@ -50,6 +50,15 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ initialProject, on
   const [selectedText, setSelectedText] = useState<string>('');
   const [analyzedRanges, setAnalyzedRanges] = useState<Array<{ start: number; end: number }>>([]);
   const scriptTextareaRef = React.useRef<HTMLTextAreaElement>(null);
+  const highlightOverlayRef = React.useRef<HTMLDivElement>(null);
+
+  // Sync scroll between textarea and highlight overlay
+  const handleScriptScroll = (e: React.UIEvent<HTMLTextAreaElement>) => {
+    if (highlightOverlayRef.current) {
+      highlightOverlayRef.current.scrollTop = e.currentTarget.scrollTop;
+      highlightOverlayRef.current.scrollLeft = e.currentTarget.scrollLeft;
+    }
+  };
 
   // Get the currently active scene
   const activeScene = project.scenes?.find(s => s.id === activeSceneId) || project.scenes?.[0];
@@ -1387,7 +1396,8 @@ Style: ${project.settings.cinematographer}, shot on ${project.settings.filmStock
                   {/* Highlighted Background Layer - shows analyzed text in green */}
                   {analyzedRanges.length > 0 && (
                     <div
-                      className="absolute inset-0 bg-black border border-neutral-800 rounded-md p-6 font-mono text-sm leading-relaxed overflow-hidden pointer-events-none whitespace-pre-wrap break-words"
+                      ref={highlightOverlayRef}
+                      className="absolute inset-0 bg-black border border-neutral-800 rounded-md p-6 font-mono text-sm leading-relaxed overflow-auto pointer-events-none whitespace-pre-wrap break-words"
                       aria-hidden="true"
                     >
                       {(() => {
@@ -1443,6 +1453,7 @@ TIP: Select (highlight) a portion of text and click 'Analyze Scene' to analyze o
                       // Reset analyzed ranges when content changes significantly
                       setAnalyzedRanges([]);
                     }}
+                    onScroll={handleScriptScroll}
                     onSelect={(e) => {
                       const textarea = e.target as HTMLTextAreaElement;
                       const start = textarea.selectionStart;
