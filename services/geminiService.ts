@@ -875,54 +875,80 @@ export const generateShotImage = async (
   try {
     const parts: any[] = [];
 
-    // 0. Inject Scene Reference Shot - TRUE IMG2IMG EDITING
-    // When a reference shot is set, use it as the BASE IMAGE to edit/alter
+    // 0. If reference shot is set, use EDIT mode (alterShotImage-style)
+    // This forces true img2img by using "Edit this image" framing
     if (referenceShot && referenceShot.imageUrl) {
+      // Use edit-style approach - inject reference as THE image to edit
       parts.push({
         inlineData: {
           mimeType: getMimeType(referenceShot.imageUrl),
           data: stripBase64Header(referenceShot.imageUrl)
         }
       });
-      parts.push({
-        text: `REFERENCE_START_IMAGE: This is the BASE IMAGE to EDIT and TRANSFORM.
-        
-⚠️ CRITICAL IMG2IMG INSTRUCTIONS:
-1. Use THIS image as your starting point - do NOT create a new image from scratch
-2. PRESERVE: The characters' faces, identities, clothing, and the environment/location
-3. MODIFY: Re-frame the shot according to the new Shot Type and Camera Angle specified below
-4. TRANSFORM: Apply the new action, composition, and camera movement while keeping visual consistency
 
-This is image-to-image editing - the output should look like the same scene, same characters, same location, but from the new camera angle/framing specified in the shot details below.`
-      });
-    }
+      // Build edit-specific prompt that forces transformation of THIS image
+      const editPrompt = `EDIT THIS IMAGE. Transform this exact scene to a ${shot.shotType} shot.
 
-    // 1. Inject Character Reference Images
-    activeCharacters.forEach(char => {
-      if (char.imageUrl) {
-        parts.push({
-          inlineData: {
-            mimeType: getMimeType(char.imageUrl),
-            data: stripBase64Header(char.imageUrl)
-          }
-        });
-        parts.push({ text: `REFERENCE_IMAGE_CHARACTER: This is "${char.name}". Maintain this exact facial structure and costume.` });
-      }
-    });
+WHAT TO PRESERVE (DO NOT CHANGE):
+- The SAME person/character (exact face, hair, skin tone, clothing)
+- The SAME room/environment (same furniture, walls, objects)
+- The SAME lighting style and color grade
+- The SAME time period/aesthetic
 
-    // 2. Inject Location Reference Image
-    if (activeLocation && activeLocation.imageUrl) {
-      parts.push({
-        inlineData: {
-          mimeType: getMimeType(activeLocation.imageUrl),
-          data: stripBase64Header(activeLocation.imageUrl)
+WHAT TO CHANGE:
+- Camera angle: Change to ${shot.shotType}
+- Framing: ${shot.shotType === 'Close Up' || shot.shotType === 'Extreme Close Up' ? 'Zoom in on the characters face/upper body' : shot.shotType === 'Wide' || shot.shotType === 'Extreme Wide' ? 'Pull back to show more of the room' : 'Adjust framing as needed'}
+- Action: ${shot.action || 'Keep the character in a similar pose'}
+- Description: ${shot.description}
+${shot.cameraMove !== 'Static' ? `- Camera movement feel: ${shot.cameraMove}` : ''}
+
+CRITICAL: This must look like a DIFFERENT CAMERA ANGLE of the SAME SCENE - not a new image. The person must be recognizably THE SAME PERSON from the input image.`;
+
+      parts.push({ text: editPrompt });
+
+      // Still add character references for additional consistency
+      activeCharacters.forEach(char => {
+        if (char.imageUrl) {
+          parts.push({
+            inlineData: {
+              mimeType: getMimeType(char.imageUrl),
+              data: stripBase64Header(char.imageUrl)
+            }
+          });
+          parts.push({ text: `This is "${char.name}" - the character in the scene. Maintain this exact appearance.` });
         }
       });
-      parts.push({ text: `REFERENCE_IMAGE_LOCATION: This is the location "${activeLocation.name}". Maintain this environment.` });
-    }
 
-    // Add main prompt
-    parts.push({ text: mainPromptText });
+    } else {
+      // NO REFERENCE - normal generation with character/location references
+
+      // 1. Inject Character Reference Images
+      activeCharacters.forEach(char => {
+        if (char.imageUrl) {
+          parts.push({
+            inlineData: {
+              mimeType: getMimeType(char.imageUrl),
+              data: stripBase64Header(char.imageUrl)
+            }
+          });
+          parts.push({ text: `REFERENCE_IMAGE_CHARACTER: This is "${char.name}". Maintain this exact facial structure and costume.` });
+        }
+      });
+
+      // 2. Inject Location Reference Image
+      if (activeLocation && activeLocation.imageUrl) {
+        parts.push({
+          inlineData: {
+            mimeType: getMimeType(activeLocation.imageUrl),
+            data: stripBase64Header(activeLocation.imageUrl)
+          }
+        });
+        parts.push({ text: `REFERENCE_IMAGE_LOCATION: This is the location "${activeLocation.name}". Maintain this environment.` });
+      }
+
+      // Add main prompt for normal generation
+      parts.push({ text: mainPromptText });
+    }
 
     const response = await ai.models.generateContent({
       model: 'gemini-3-pro-image-preview',
