@@ -132,7 +132,7 @@ export const generateWanVideo = async (
 
     try {
         // Use fal.subscribe for queue-based generation with progress updates
-        const result = await fal.subscribe('fal-ai/wan/v2.6/image-to-video', {
+        const result = await fal.subscribe('wan/v2.6/image-to-video', {
             input,
             logs: true,
             onQueueUpdate: (update) => {
