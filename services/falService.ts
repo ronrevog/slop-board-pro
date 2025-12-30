@@ -1,15 +1,14 @@
 /**
  * fal.ai Service - Wan v2.6 Image-to-Video
- * Queue-based video generation using fal.ai's Wan 2.6 model
+ * Uses official @fal-ai/client SDK to avoid CORS issues
  */
 
+import { fal } from '@fal-ai/client';
 import { VideoProviderSettings } from '../types';
 
-const FAL_API_BASE = 'https://queue.fal.run';
-
 /**
- * Validate a fal.ai API key by making a test request
- * @returns { valid: boolean, error?: string }
+ * Validate a fal.ai API key by checking its format
+ * Note: Full validation happens on first request
  */
 export const validateFalApiKey = async (apiKey: string): Promise<{ valid: boolean; error?: string }> => {
     if (!apiKey || apiKey.trim().length < 10) {
@@ -18,43 +17,45 @@ export const validateFalApiKey = async (apiKey: string): Promise<{ valid: boolea
 
     const cleanKey = apiKey.trim().replace(/^Key\s+/i, '');
 
-    try {
-        // Use the fal.ai API info endpoint or a lightweight validation
-        // Making a small request to check if key is valid
-        const response = await fetch('https://fal.run/fal-ai/fast-sdxl', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Key ${cleanKey}`,
-            },
-            body: JSON.stringify({
-                prompt: 'test',
-                num_inference_steps: 1,
-                guidance_scale: 1,
-                sync_mode: true
-            }),
-        });
-
-        // If we get 401 or 403, the key is invalid
-        if (response.status === 401) {
-            return { valid: false, error: 'Invalid API key - authentication failed' };
-        }
-        if (response.status === 403) {
-            return { valid: false, error: 'API key does not have required permissions' };
-        }
-
-        // Even if we get other errors, if we didn't get 401/403, the key is likely valid
-        // (other errors might be rate limiting, model not found, etc.)
-        return { valid: true };
-    } catch (e: any) {
-        // Network errors might be CORS - try a different approach
-        console.warn('Key validation failed, assuming valid:', e);
-        // If we can't reach the API, assume the key format is ok
-        if (cleanKey.startsWith('fal-') || cleanKey.length > 20) {
-            return { valid: true };
-        }
-        return { valid: false, error: 'Could not validate key - network error' };
+    // Check if it looks like a valid fal.ai key format
+    if (!cleanKey.match(/^[a-zA-Z0-9_-]+:[a-zA-Z0-9_-]+$/) && !cleanKey.startsWith('fal-')) {
+        // Key might still be valid, but format is unusual
+        console.warn('API key format is unusual, but proceeding...');
     }
+
+    // Configure fal client with the key for a quick test
+    fal.config({
+        credentials: cleanKey
+    });
+
+    // The SDK doesn't have a direct "validate" endpoint, so we accept format-valid keys
+    // Real validation will happen on first video generation
+    if (cleanKey.length >= 20) {
+        return { valid: true };
+    }
+
+    return { valid: false, error: 'API key appears to be invalid format' };
+};
+
+// Helper to convert Blob to Base64
+const blobToBase64 = (blob: Blob): Promise<string> => {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result as string);
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+    });
+};
+
+// Helper to prepare image URL (fal SDK accepts data URIs)
+const prepareImageUrl = async (imageUrl: string): Promise<string> => {
+    if (imageUrl.startsWith('http://') || imageUrl.startsWith('https://')) {
+        return imageUrl;
+    }
+    if (imageUrl.startsWith('data:')) {
+        return imageUrl;
+    }
+    return `data:image/png;base64,${imageUrl}`;
 };
 
 export interface WanVideoInput {
@@ -84,113 +85,8 @@ export interface WanVideoOutput {
     actual_prompt?: string;
 }
 
-interface QueueStatus {
-    status: 'IN_QUEUE' | 'IN_PROGRESS' | 'COMPLETED';
-    request_id: string;
-    response_url?: string;
-    status_url?: string;
-    queue_position?: number;
-    logs?: any;
-    metrics?: any;
-}
-
-// Helper to convert Blob to Base64
-const blobToBase64 = (blob: Blob): Promise<string> => {
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onloadend = () => resolve(reader.result as string);
-        reader.onerror = reject;
-        reader.readAsDataURL(blob);
-    });
-};
-
-// Helper to upload base64 image to a temporary host or convert to data URI
-const prepareImageUrl = async (imageUrl: string): Promise<string> => {
-    // If already a URL, return as-is
-    if (imageUrl.startsWith('http://') || imageUrl.startsWith('https://')) {
-        return imageUrl;
-    }
-    // If base64 data URI, return as-is (fal.ai accepts data URIs)
-    if (imageUrl.startsWith('data:')) {
-        return imageUrl;
-    }
-    // Otherwise assume it's base64 without prefix
-    return `data:image/png;base64,${imageUrl}`;
-};
-
 /**
- * Submit a video generation request to fal.ai queue
- */
-const submitToQueue = async (
-    input: WanVideoInput,
-    apiKey: string
-): Promise<QueueStatus> => {
-    const response = await fetch(`${FAL_API_BASE}/wan/v2.6/image-to-video`, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Key ${apiKey}`,
-        },
-        body: JSON.stringify(input),
-    });
-
-    if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`fal.ai submission failed: ${response.status} - ${errorText}`);
-    }
-
-    return await response.json();
-};
-
-/**
- * Check the status of a queued request
- */
-const checkStatus = async (
-    requestId: string,
-    apiKey: string
-): Promise<QueueStatus> => {
-    const response = await fetch(
-        `${FAL_API_BASE}/wan/v2.6/image-to-video/requests/${requestId}/status`,
-        {
-            headers: {
-                'Authorization': `Key ${apiKey}`,
-            },
-        }
-    );
-
-    if (!response.ok) {
-        throw new Error(`Status check failed: ${response.status}`);
-    }
-
-    return await response.json();
-};
-
-/**
- * Get the result of a completed request
- */
-const getResult = async (
-    requestId: string,
-    apiKey: string
-): Promise<WanVideoOutput> => {
-    const response = await fetch(
-        `${FAL_API_BASE}/wan/v2.6/image-to-video/requests/${requestId}`,
-        {
-            headers: {
-                'Authorization': `Key ${apiKey}`,
-            },
-        }
-    );
-
-    if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Result fetch failed: ${response.status} - ${errorText}`);
-    }
-
-    return await response.json();
-};
-
-/**
- * Generate a video using Wan v2.6 image-to-video
+ * Generate a video using Wan v2.6 image-to-video via fal.ai SDK
  * @param imageUrl - Base64 or URL of the source image
  * @param prompt - Motion/action prompt for the video
  * @param settings - Video provider settings
@@ -207,6 +103,12 @@ export const generateWanVideo = async (
     if (!apiKey) {
         throw new Error('fal.ai API key is required. Please add it in project settings.');
     }
+
+    // Configure fal client with credentials
+    const cleanKey = apiKey.trim().replace(/^Key\s+/i, '');
+    fal.config({
+        credentials: cleanKey
+    });
 
     // Prepare the image URL
     const preparedImageUrl = await prepareImageUrl(imageUrl);
@@ -225,92 +127,78 @@ export const generateWanVideo = async (
         audio_url: settings.wanAudioUrl || undefined,
     };
 
-    console.log('Submitting to fal.ai Wan v2.6:', input);
-    onProgress?.('Submitting to queue...');
+    console.log('Submitting to fal.ai Wan v2.6 via SDK:', { ...input, image_url: input.image_url.substring(0, 50) + '...' });
+    onProgress?.('Submitting to fal.ai...');
 
-    // Submit to queue
-    const queueResponse = await submitToQueue(input, apiKey);
-    const requestId = queueResponse.request_id;
-
-    console.log('fal.ai request submitted:', requestId);
-    onProgress?.('In queue...', queueResponse.queue_position);
-
-    // Poll for completion
-    let status = queueResponse.status;
-    let pollCount = 0;
-    const maxPolls = 300; // 5 minutes max (1 poll per second)
-
-    while (status !== 'COMPLETED' && pollCount < maxPolls) {
-        await new Promise(resolve => setTimeout(resolve, 2000)); // Poll every 2 seconds
-        pollCount++;
-
-        const statusResponse = await checkStatus(requestId, apiKey);
-        status = statusResponse.status;
-
-        if (status === 'IN_QUEUE') {
-            onProgress?.('In queue...', statusResponse.queue_position);
-        } else if (status === 'IN_PROGRESS') {
-            onProgress?.('Generating video...');
-        }
-
-        console.log(`fal.ai status (${pollCount}):`, status);
-    }
-
-    if (status !== 'COMPLETED') {
-        throw new Error('Video generation timed out');
-    }
-
-    onProgress?.('Downloading video...');
-
-    // Get the result
-    const result = await getResult(requestId, apiKey);
-
-    if (!result.video?.url) {
-        throw new Error('No video URL in result');
-    }
-
-    console.log('fal.ai video generated:', result.video.url);
-
-    // Fetch the video and convert to base64
     try {
-        const videoResponse = await fetch(result.video.url);
-        if (!videoResponse.ok) {
-            throw new Error('Failed to download video');
+        // Use fal.subscribe for queue-based generation with progress updates
+        const result = await fal.subscribe('fal-ai/wan/v2.6/image-to-video', {
+            input,
+            logs: true,
+            onQueueUpdate: (update) => {
+                if (update.status === 'IN_QUEUE') {
+                    const position = (update as any).queue_position;
+                    onProgress?.('In queue...', position);
+                    console.log('Queue position:', position);
+                } else if (update.status === 'IN_PROGRESS') {
+                    onProgress?.('Generating video...');
+                    console.log('Generation in progress...');
+                    if (update.logs) {
+                        update.logs.forEach(log => console.log('fal.ai log:', log.message));
+                    }
+                }
+            },
+        });
+
+        console.log('fal.ai result:', result);
+
+        const videoData = result.data as WanVideoOutput;
+
+        if (!videoData?.video?.url) {
+            throw new Error('No video URL in result');
         }
-        const blob = await videoResponse.blob();
-        return await blobToBase64(blob);
-    } catch (fetchError) {
-        console.warn('Could not fetch video blob, returning URL:', fetchError);
-        return result.video.url;
+
+        console.log('fal.ai video generated:', videoData.video.url);
+        onProgress?.('Downloading video...');
+
+        // Fetch the video and convert to base64
+        try {
+            const videoResponse = await fetch(videoData.video.url);
+            if (!videoResponse.ok) {
+                throw new Error('Failed to download video');
+            }
+            const blob = await videoResponse.blob();
+            return await blobToBase64(blob);
+        } catch (fetchError) {
+            console.warn('Could not fetch video blob, returning URL:', fetchError);
+            return videoData.video.url;
+        }
+    } catch (error: any) {
+        console.error('fal.ai SDK error:', error);
+
+        // Handle specific error types
+        if (error.status === 401 || error.message?.includes('401')) {
+            throw new Error('fal.ai API key is invalid. Please check your key in Settings.');
+        }
+        if (error.status === 403 || error.message?.includes('403')) {
+            throw new Error('fal.ai API key does not have permission for this model.');
+        }
+        if (error.message?.includes('CORS') || error.message?.includes('Load failed')) {
+            throw new Error('Network error - please check your connection and try again.');
+        }
+
+        throw new Error(error.message || 'fal.ai video generation failed');
     }
 };
 
 /**
- * Cancel a queued request
+ * Cancel is not directly supported by fal SDK subscribe
+ * The generation will complete but result won't be used
  */
 export const cancelWanVideo = async (
     requestId: string,
     apiKey: string
 ): Promise<boolean> => {
-    try {
-        const response = await fetch(
-            `${FAL_API_BASE}/wan/v2.6/image-to-video/requests/${requestId}/cancel`,
-            {
-                method: 'PUT',
-                headers: {
-                    'Authorization': `Key ${apiKey}`,
-                },
-            }
-        );
-
-        if (!response.ok) {
-            return false;
-        }
-
-        const result = await response.json();
-        return result.success || false;
-    } catch (error) {
-        console.error('Cancel failed:', error);
-        return false;
-    }
+    console.warn('Cancel not supported via fal SDK');
+    return false;
 };
