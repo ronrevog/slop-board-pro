@@ -50,3 +50,22 @@ h4,
 .animate-fade-in {
     animation: fade-in 0.2s ease-out;
 }
+
+/* Indeterminate progress bar animation */
+@keyframes indeterminate-progress {
+    0% {
+        transform: translateX(-100%);
+    }
+
+    50% {
+        transform: translateX(150%);
+    }
+
+    100% {
+        transform: translateX(-100%);
+    }
+}
+
+.animate-indeterminate-progress {
+    animation: indeterminate-progress 2s ease-in-out infinite;
+}

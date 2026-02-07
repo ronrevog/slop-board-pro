@@ -1,8 +1,10 @@
 
 import React, { useState, useRef } from 'react';
 import { Shot, VideoSegment, VideoProviderSettings, DEFAULT_VIDEO_SETTINGS } from '../types';
+import { AuroraGenerationSettings, uploadFileToFal } from '../services/falService';
 import { Button } from './Button';
-import { Download, Loader2, Clapperboard, Video, ImageIcon, MonitorPlay, RefreshCw, Film, Play, AlertTriangle, X, Camera, Settings, ChevronDown, ChevronUp, CheckSquare, Square } from 'lucide-react';
+import { Download, Loader2, Clapperboard, Video, ImageIcon, MonitorPlay, RefreshCw, Film, Play, AlertTriangle, X, Camera, Settings, ChevronDown, ChevronUp, CheckSquare, Square, Music, Upload, Mic, StopCircle, Trash2, Archive } from 'lucide-react';
+import JSZip from 'jszip';
 
 export interface WanGenerationSettings {
   resolution: '720p' | '1080p';
@@ -17,29 +19,35 @@ export interface WanGenerationSettings {
 
 interface VideoShotCardProps {
   shot: Shot;
+  projectTitle?: string;
   sceneName?: string;
   videoModelLabel: string;
   projectVideoSettings?: VideoProviderSettings;
   onUpdatePrompt: (id: string, prompt: string) => void;
   onGenerate: (id: string, model: 'fast' | 'quality') => void;
-  onGenerateWan: (id: string, settings: WanGenerationSettings) => void;
+  onGenerateWan: (id: string, settings: WanGenerationSettings, sourceVideoUrl?: string) => void;
+  onGenerateAurora: (id: string, settings: AuroraGenerationSettings) => void;
   onExtend: (id: string, model: 'fast' | 'quality') => void;
   onDownload: (shot: Shot, sceneName?: string) => void;
   onCaptureFrame: (id: string, imageDataUrl: string) => void;
+  onDeleteSegment: (shotId: string, segmentId: string) => void;
   synthesizePrompt: (shot: Shot) => string;
 }
 
 export const VideoShotCard: React.FC<VideoShotCardProps> = ({
   shot,
+  projectTitle,
   sceneName,
   videoModelLabel,
   projectVideoSettings,
   onUpdatePrompt,
   onGenerate,
   onGenerateWan,
+  onGenerateAurora,
   onExtend,
   onDownload,
   onCaptureFrame,
+  onDeleteSegment,
   synthesizePrompt
 }) => {
   // State is now safe here because this is a separate component instance
@@ -54,10 +62,221 @@ export const VideoShotCard: React.FC<VideoShotCardProps> = ({
   // Feedback state for capture
   const [captureStatus, setCaptureStatus] = useState<'idle' | 'success' | 'error'>('idle');
 
+  // Zip download state
+  const [isZipping, setIsZipping] = useState(false);
+  const [zipError, setZipError] = useState<string | null>(null);
+
+  // Helper: convert any video URL to a Blob
+  const urlToBlob = async (url: string): Promise<Blob> => {
+    // Base64 data URL → decode directly (no network needed)
+    if (url.startsWith('data:')) {
+      const parts = url.split(',');
+      const mime = parts[0].match(/:(.*?);/)?.[1] || 'video/mp4';
+      const bstr = atob(parts[1]);
+      const u8arr = new Uint8Array(bstr.length);
+      for (let i = 0; i < bstr.length; i++) u8arr[i] = bstr.charCodeAt(i);
+      return new Blob([u8arr], { type: mime });
+    }
+    // Blob URL → fetch works directly
+    if (url.startsWith('blob:')) {
+      const res = await fetch(url);
+      return await res.blob();
+    }
+    // Remote URL → try fetch, if CORS blocks, load via video+MediaRecorder
+    try {
+      const res = await fetch(url, { mode: 'cors' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return await res.blob();
+    } catch {
+      // CORS fallback: load video into element and capture via canvas frames
+      return new Promise<Blob>((resolve, reject) => {
+        const video = document.createElement('video');
+        video.crossOrigin = 'anonymous';
+        video.preload = 'auto';
+        video.muted = true;
+        video.playsInline = true;
+
+        const timeout = setTimeout(() => {
+          reject(new Error('Video load timeout'));
+        }, 30000);
+
+        video.onloadeddata = async () => {
+          clearTimeout(timeout);
+          try {
+            // Use MediaRecorder to capture the video as a blob
+            const canvas = document.createElement('canvas');
+            canvas.width = video.videoWidth || 1280;
+            canvas.height = video.videoHeight || 720;
+            const ctx = canvas.getContext('2d')!;
+            const stream = canvas.captureStream(30);
+
+            // Add audio if available
+            try {
+              const audioCtx = new AudioContext();
+              const source = audioCtx.createMediaElementSource(video);
+              const dest = audioCtx.createMediaStreamDestination();
+              source.connect(dest);
+              dest.stream.getAudioTracks().forEach(t => stream.addTrack(t));
+            } catch { }
+
+            const chunks: Blob[] = [];
+            const recorder = new MediaRecorder(stream, { mimeType: 'video/webm' });
+            recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
+
+            recorder.onstop = () => {
+              const blob = new Blob(chunks, { type: 'video/webm' });
+              video.src = '';
+              resolve(blob);
+            };
+
+            recorder.start();
+            video.play();
+
+            video.onended = () => {
+              recorder.stop();
+            };
+          } catch (e) {
+            reject(e);
+          }
+        };
+
+        video.onerror = () => {
+          clearTimeout(timeout);
+          reject(new Error('Failed to load video'));
+        };
+
+        video.src = url;
+      });
+    }
+  };
+
   // Provider selection state per-shot (defaults to project setting or 'veo')
-  const [selectedProvider, setSelectedProvider] = useState<'veo' | 'wan'>(
-    projectVideoSettings?.provider === 'fal-wan' ? 'wan' : 'veo'
-  );
+  const [selectedProvider, setSelectedProvider] = useState<'veo' | 'wan' | 'aurora'>(() => {
+    if (projectVideoSettings?.provider === 'fal-aurora') return 'aurora';
+    if (projectVideoSettings?.provider === 'fal-wan') return 'wan';
+    return 'veo';
+  });
+
+  // Aurora settings state (initialized from project settings)
+  const [auroraSettings, setAuroraSettings] = useState<AuroraGenerationSettings>({
+    resolution: projectVideoSettings?.auroraResolution || '720p',
+    guidanceScale: projectVideoSettings?.auroraGuidanceScale ?? 1,
+    audioGuidanceScale: projectVideoSettings?.auroraAudioGuidanceScale ?? 2,
+    audioUrl: projectVideoSettings?.auroraAudioUrl || '',
+    prompt: projectVideoSettings?.auroraPrompt || '',
+  });
+
+  // Show/hide Aurora settings panel
+  const [showAuroraSettings, setShowAuroraSettings] = useState(false);
+
+  // Audio file upload state
+  const [isUploadingAudio, setIsUploadingAudio] = useState(false);
+  const [uploadedAudioName, setUploadedAudioName] = useState<string | null>(null);
+  const audioFileInputRef = useRef<HTMLInputElement>(null);
+
+  // Handle audio file upload
+  const handleAudioFileUpload = async (file: File) => {
+    if (!projectVideoSettings?.falApiKey) {
+      console.error('fal.ai API key required for upload');
+      return;
+    }
+    setIsUploadingAudio(true);
+    setUploadedAudioName(null);
+    try {
+      const url = await uploadFileToFal(file, projectVideoSettings.falApiKey);
+      setAuroraSettings(s => ({ ...s, audioUrl: url }));
+      setUploadedAudioName(file.name);
+    } catch (e: any) {
+      console.error('Audio upload failed:', e);
+    } finally {
+      setIsUploadingAudio(false);
+    }
+  };
+
+  // --- Microphone Recording ---
+  const MAX_RECORDING_SECONDS = 60;
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingSeconds, setRecordingSeconds] = useState(0);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const recordingStreamRef = useRef<MediaStream | null>(null);
+
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      recordingStreamRef.current = stream;
+      audioChunksRef.current = [];
+      setRecordingSeconds(0);
+
+      const mediaRecorder = new MediaRecorder(stream, {
+        mimeType: MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : 'audio/mp4'
+      });
+      mediaRecorderRef.current = mediaRecorder;
+
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) {
+          audioChunksRef.current.push(e.data);
+        }
+      };
+
+      mediaRecorder.onstop = async () => {
+        // Stop all tracks
+        stream.getTracks().forEach(t => t.stop());
+        recordingStreamRef.current = null;
+
+        // Clear timer
+        if (recordingTimerRef.current) {
+          clearInterval(recordingTimerRef.current);
+          recordingTimerRef.current = null;
+        }
+
+        // Create WAV file from chunks
+        const blob = new Blob(audioChunksRef.current, { type: mediaRecorder.mimeType });
+        const file = new File([blob], `recording-${Date.now()}.wav`, { type: 'audio/wav' });
+
+        // Upload to fal.ai
+        await handleAudioFileUpload(file);
+        setIsRecording(false);
+      };
+
+      mediaRecorder.start(250); // Collect data every 250ms
+      setIsRecording(true);
+
+      // Start timer and auto-stop at 60 seconds
+      recordingTimerRef.current = setInterval(() => {
+        setRecordingSeconds(prev => {
+          const next = prev + 1;
+          if (next >= MAX_RECORDING_SECONDS) {
+            stopRecording();
+          }
+          return next;
+        });
+      }, 1000);
+    } catch (err) {
+      console.error('Microphone access denied or unavailable:', err);
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop();
+    }
+    if (recordingTimerRef.current) {
+      clearInterval(recordingTimerRef.current);
+      recordingTimerRef.current = null;
+    }
+  };
+
+  // Cleanup on unmount
+  React.useEffect(() => {
+    return () => {
+      if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
+      if (recordingStreamRef.current) {
+        recordingStreamRef.current.getTracks().forEach(t => t.stop());
+      }
+    };
+  }, []);
 
   // Wan settings state (initialized from project settings)
   const [wanSettings, setWanSettings] = useState<WanGenerationSettings>({
@@ -237,9 +456,25 @@ export const VideoShotCard: React.FC<VideoShotCardProps> = ({
             {/* Loading Overlay */}
             {(shot.isVideoGenerating || shot.isExtending) && (
               <div className="absolute inset-0 bg-black/80 flex flex-col items-center justify-center z-20 backdrop-blur-sm">
-                <Loader2 className="w-12 h-12 text-red-600 animate-spin mb-4" />
-                <div className="text-white font-serif text-xl tracking-wide">{shot.isExtending ? 'Extending Video...' : 'Generating Video...'}</div>
-                <div className="text-neutral-400 text-xs mt-2 uppercase tracking-widest">{videoModelLabel}</div>
+                <Loader2 className={`w-12 h-12 animate-spin mb-4 ${selectedProvider === 'wan' ? 'text-orange-500' : selectedProvider === 'aurora' ? 'text-purple-500' : 'text-red-600'
+                  }`} />
+                <div className="text-white font-serif text-xl tracking-wide">
+                  {shot.isExtending ? 'Extending Video...' : 'Generating Video...'}
+                </div>
+                <div className={`text-xs mt-2 uppercase tracking-widest ${selectedProvider === 'wan' ? 'text-orange-400' : selectedProvider === 'aurora' ? 'text-purple-400' : 'text-neutral-400'
+                  }`}>
+                  {selectedProvider === 'wan' ? 'Wan v2.6 (fal.ai)'
+                    : selectedProvider === 'aurora' ? 'Lip Sync — Aurora (fal.ai)'
+                      : videoModelLabel}
+                </div>
+                {/* Indeterminate progress bar */}
+                <div className="w-48 mt-4 bg-neutral-800 rounded-full h-1.5 overflow-hidden">
+                  <div className={`h-full rounded-full animate-indeterminate-progress ${selectedProvider === 'wan' ? 'bg-orange-500' : selectedProvider === 'aurora' ? 'bg-purple-500' : 'bg-red-600'
+                    }`}
+                    style={{ width: '40%' }}
+                  />
+                </div>
+                <p className="text-[10px] text-neutral-500 mt-2">This may take 1-3 minutes</p>
               </div>
             )}
           </div>
@@ -247,11 +482,67 @@ export const VideoShotCard: React.FC<VideoShotCardProps> = ({
           {/* Stringout Timeline - Video Segments */}
           {segments.length > 0 && viewMode === 'video' && (
             <div className="bg-neutral-900/50 border-t border-neutral-800 p-4">
-              <div className="flex items-center gap-2 mb-2">
-                <Film className="w-3 h-3 text-neutral-500" />
-                <span className="text-xs font-bold text-neutral-500 uppercase tracking-widest">
-                  Video Stringout ({segments.length} {segments.length === 1 ? 'segment' : 'segments'})
-                </span>
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <Film className="w-3 h-3 text-neutral-500" />
+                  <span className="text-xs font-bold text-neutral-500 uppercase tracking-widest">
+                    Video Stringout ({segments.length} {segments.length === 1 ? 'segment' : 'segments'})
+                  </span>
+                </div>
+                {segments.length > 0 && (
+                  <button
+                    onClick={async () => {
+                      if (isZipping) return;
+                      setIsZipping(true);
+                      setZipError(null);
+                      try {
+                        const zip = new JSZip();
+                        const titlePrefix = projectTitle ? `${projectTitle.replace(/[^a-z0-9]/gi, '-').toLowerCase()}-` : '';
+                        const scenePrefix = sceneName ? `${sceneName.replace(/\s+/g, '-').toLowerCase()}-` : '';
+
+                        for (let i = 0; i < segments.length; i++) {
+                          const segment = segments[i];
+                          const ext = segment.url.startsWith('data:video/webm') ? '.webm' : '.mp4';
+                          const fileName = `${titlePrefix}${scenePrefix}shot-${shot.number}-seg-${i + 1}${ext}`;
+                          const blob = await urlToBlob(segment.url);
+                          zip.file(fileName, blob);
+                        }
+
+                        const zipBlob = await zip.generateAsync({ type: 'blob' });
+                        const zipUrl = URL.createObjectURL(zipBlob);
+                        const link = document.createElement('a');
+                        link.href = zipUrl;
+                        link.download = `${titlePrefix}${scenePrefix}shot-${shot.number}-all-segments.zip`;
+                        document.body.appendChild(link);
+                        link.click();
+                        document.body.removeChild(link);
+                        setTimeout(() => URL.revokeObjectURL(zipUrl), 5000);
+                      } catch (err: any) {
+                        console.error('Zip download failed:', err);
+                        setZipError(err?.message || 'Download failed');
+                        setTimeout(() => setZipError(null), 5000);
+                      } finally {
+                        setIsZipping(false);
+                      }
+                    }}
+                    disabled={isZipping}
+                    className={`flex items-center gap-1.5 px-2.5 py-1 border rounded-md transition-colors text-xs ${isZipping
+                      ? 'bg-neutral-700 text-neutral-400 border-neutral-600 cursor-wait'
+                      : zipError
+                        ? 'bg-red-900/50 text-red-400 border-red-800'
+                        : 'bg-neutral-800 hover:bg-red-900/50 text-neutral-400 hover:text-white border-neutral-700 hover:border-red-800'
+                      }`}
+                    title={zipError || `Download all ${segments.length} segments as ZIP`}
+                  >
+                    {isZipping ? (
+                      <><Loader2 className="w-3 h-3 animate-spin" /> Zipping...</>
+                    ) : zipError ? (
+                      <><AlertTriangle className="w-3 h-3" /> Failed</>
+                    ) : (
+                      <><Archive className="w-3 h-3" /> Download ZIP</>
+                    )}
+                  </button>
+                )}
               </div>
               <div className="flex gap-2 overflow-x-auto pb-2 custom-scrollbar">
                 {segments.map((segment, index) => (
@@ -281,7 +572,7 @@ export const VideoShotCard: React.FC<VideoShotCardProps> = ({
                       <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/40 group-hover:bg-black/20 transition-colors">
                         <Play className={`w-4 h-4 ${selectedSegmentIndex === index ? 'text-red-400' : 'text-white/70'}`} />
                         <span className="text-[10px] text-white/80 mt-1 font-medium">
-                          {index === 0 ? 'Original' : `Ext ${index}`}
+                          {segment.isExtension ? `Ext ${index}` : `Gen ${index + 1}`}
                         </span>
                       </div>
 
@@ -299,14 +590,15 @@ export const VideoShotCard: React.FC<VideoShotCardProps> = ({
                       )}
                     </button>
 
-                    {/* Download button for segment */}
+                    {/* Segment action buttons */}
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
                         const link = document.createElement('a');
                         link.href = segment.url;
+                        const tPrefix = projectTitle ? `${projectTitle.replace(/[^a-z0-9]/gi, '-').toLowerCase()}-` : '';
                         const scenePrefix = sceneName ? `${sceneName.replace(/\s+/g, '-').toLowerCase()}-` : '';
-                        link.download = `${scenePrefix}shot-${shot.number}-${index === 0 ? 'original' : `ext-${index}`}.mp4`;
+                        link.download = `${tPrefix}${scenePrefix}shot-${shot.number}-${index === 0 ? 'original' : `ext-${index}`}.mp4`;
                         document.body.appendChild(link);
                         link.click();
                         document.body.removeChild(link);
@@ -316,14 +608,37 @@ export const VideoShotCard: React.FC<VideoShotCardProps> = ({
                     >
                       <Download className="w-3 h-3" />
                     </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (selectedSegmentIndex === index) {
+                          setSelectedSegmentIndex(null);
+                        }
+                        onDeleteSegment(shot.id, segment.id);
+                      }}
+                      className="absolute -top-1 -right-1 p-1 bg-neutral-800 hover:bg-red-600 text-white rounded-full transition-colors z-10 opacity-0 group-hover/segment:opacity-100"
+                      title="Remove segment"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                    </button>
                   </div>
                 ))}
               </div>
-              {segments.length > 1 && (
-                <p className="text-[10px] text-neutral-500 mt-1">
-                  Click a segment to view. Current: {selectedSegmentIndex !== null ? (selectedSegmentIndex === 0 ? 'Original' : `Extension ${selectedSegmentIndex}`) : 'Latest'}
+              <div className="flex items-center justify-between mt-1">
+                <p className="text-[10px] text-neutral-500">
+                  {selectedSegmentIndex !== null
+                    ? `Selected: ${segments[selectedSegmentIndex]?.isExtension ? `Extension ${selectedSegmentIndex}` : `Segment ${selectedSegmentIndex + 1}`} — last frame used as source`
+                    : 'No segment selected — storyboard image used as source'}
                 </p>
-              )}
+                {selectedSegmentIndex !== null && (
+                  <button
+                    onClick={() => setSelectedSegmentIndex(null)}
+                    className="text-[10px] text-neutral-400 hover:text-white flex items-center gap-1 bg-neutral-800 hover:bg-neutral-700 px-2 py-0.5 rounded transition-colors"
+                  >
+                    <X className="w-3 h-3" /> Deselect
+                  </button>
+                )}
+              </div>
             </div>
           )}
         </div>
@@ -380,10 +695,10 @@ export const VideoShotCard: React.FC<VideoShotCardProps> = ({
               <label className="text-xs font-bold text-neutral-400 uppercase tracking-widest flex items-center gap-2">
                 <Video className="w-3 h-3" /> Video Provider
               </label>
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-3 gap-2">
                 <button
                   onClick={() => setSelectedProvider('veo')}
-                  className={`px-3 py-2 rounded-lg border-2 text-sm font-medium transition-all ${selectedProvider === 'veo'
+                  className={`px-2 py-2 rounded-lg border-2 text-xs font-medium transition-all ${selectedProvider === 'veo'
                     ? 'border-red-600 bg-red-900/20 text-white'
                     : 'border-neutral-700 bg-neutral-800/50 text-neutral-400 hover:border-neutral-500'
                     }`}
@@ -392,12 +707,21 @@ export const VideoShotCard: React.FC<VideoShotCardProps> = ({
                 </button>
                 <button
                   onClick={() => setSelectedProvider('wan')}
-                  className={`px-3 py-2 rounded-lg border-2 text-sm font-medium transition-all ${selectedProvider === 'wan'
+                  className={`px-2 py-2 rounded-lg border-2 text-xs font-medium transition-all ${selectedProvider === 'wan'
                     ? 'border-orange-600 bg-orange-900/20 text-white'
                     : 'border-neutral-700 bg-neutral-800/50 text-neutral-400 hover:border-neutral-500'
                     }`}
                 >
-                  Wan v2.6 (fal.ai)
+                  Wan v2.6
+                </button>
+                <button
+                  onClick={() => setSelectedProvider('aurora')}
+                  className={`px-2 py-2 rounded-lg border-2 text-xs font-medium transition-all ${selectedProvider === 'aurora'
+                    ? 'border-purple-600 bg-purple-900/20 text-white'
+                    : 'border-neutral-700 bg-neutral-800/50 text-neutral-400 hover:border-neutral-500'
+                    }`}
+                >
+                  Lip Sync
                 </button>
               </div>
             </div>
@@ -552,14 +876,269 @@ export const VideoShotCard: React.FC<VideoShotCardProps> = ({
                   </div>
                 )}
 
+                {/* Source Indicator for Wan */}
+                {segments.length > 0 && (
+                  <div className={`text-xs rounded px-2 py-1 flex items-center gap-1 ${selectedSegmentIndex !== null
+                    ? 'text-blue-400 bg-blue-900/20 border border-blue-900/30'
+                    : 'text-neutral-400 bg-neutral-800/50 border border-neutral-700'
+                    }`}>
+                    🎬 Source: {selectedSegmentIndex !== null
+                      ? `Last frame of ${segments[selectedSegmentIndex]?.isExtension ? `Extension ${selectedSegmentIndex}` : `Segment ${selectedSegmentIndex + 1}`}`
+                      : 'Storyboard image (no segment selected)'}
+                  </div>
+                )}
+
                 {/* Generate Button */}
                 <Button
                   variant="primary"
-                  onClick={() => onGenerateWan(shot.id, wanSettings)}
+                  onClick={() => {
+                    const sourceUrl = selectedSegmentIndex !== null && segments[selectedSegmentIndex]
+                      ? segments[selectedSegmentIndex].url
+                      : undefined;
+                    onGenerateWan(shot.id, wanSettings, sourceUrl);
+                  }}
                   disabled={shot.isVideoGenerating || shot.isExtending || !shot.imageUrl || !projectVideoSettings?.falApiKey}
                   className="w-full h-12 bg-orange-600 hover:bg-orange-700"
                 >
                   {shot.videoUrl ? `Regenerate (${wanSettings.duration}s)` : `Generate Wan (${wanSettings.duration}s)`}
+                </Button>
+              </div>
+            )}
+
+            {/* Aurora (Creatify) Settings & Generate */}
+            {selectedProvider === 'aurora' && (
+              <div className="space-y-3 animate-fade-in">
+                {/* Aurora Settings Toggle */}
+                <button
+                  onClick={() => setShowAuroraSettings(!showAuroraSettings)}
+                  className="w-full flex items-center justify-between px-3 py-2 bg-neutral-800/50 border border-neutral-700 rounded-lg text-sm text-neutral-300 hover:bg-neutral-800 transition-colors"
+                >
+                  <span className="flex items-center gap-2">
+                    <Settings className="w-3 h-3" /> Aurora Settings
+                  </span>
+                  {showAuroraSettings ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                </button>
+
+                {/* Aurora Settings Panel */}
+                {showAuroraSettings && (
+                  <div className="bg-neutral-800/30 border border-neutral-700 rounded-lg p-3 space-y-3 animate-fade-in">
+                    {/* Resolution */}
+                    <div className="space-y-1">
+                      <label className="text-[10px] text-neutral-500 uppercase">Resolution</label>
+                      <select
+                        className="w-full bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs text-white"
+                        value={auroraSettings.resolution}
+                        onChange={(e) => setAuroraSettings(s => ({ ...s, resolution: e.target.value as '480p' | '720p' }))}
+                      >
+                        <option value="480p">480p</option>
+                        <option value="720p">720p</option>
+                      </select>
+                    </div>
+
+                    {/* Guidance Scale */}
+                    <div className="space-y-1">
+                      <label className="text-[10px] text-neutral-500 uppercase">
+                        Prompt Guidance Scale ({auroraSettings.guidanceScale})
+                      </label>
+                      <input
+                        type="range"
+                        min="0"
+                        max="5"
+                        step="0.1"
+                        value={auroraSettings.guidanceScale}
+                        onChange={(e) => setAuroraSettings(s => ({ ...s, guidanceScale: parseFloat(e.target.value) }))}
+                        className="w-full accent-purple-500"
+                      />
+                      <div className="flex justify-between text-[9px] text-neutral-600">
+                        <span>0 (Free)</span>
+                        <span>5 (Strict)</span>
+                      </div>
+                    </div>
+
+                    {/* Audio Guidance Scale */}
+                    <div className="space-y-1">
+                      <label className="text-[10px] text-neutral-500 uppercase">
+                        Audio Guidance Scale ({auroraSettings.audioGuidanceScale})
+                      </label>
+                      <input
+                        type="range"
+                        min="0"
+                        max="5"
+                        step="0.1"
+                        value={auroraSettings.audioGuidanceScale}
+                        onChange={(e) => setAuroraSettings(s => ({ ...s, audioGuidanceScale: parseFloat(e.target.value) }))}
+                        className="w-full accent-purple-500"
+                      />
+                      <div className="flex justify-between text-[9px] text-neutral-600">
+                        <span>0 (Free)</span>
+                        <span>5 (Strict)</span>
+                      </div>
+                    </div>
+
+                    {/* Prompt Override */}
+                    <div className="space-y-1">
+                      <label className="text-[10px] text-neutral-500 uppercase">Prompt Override (optional)</label>
+                      <input
+                        type="text"
+                        className="w-full bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs text-white placeholder-neutral-600"
+                        placeholder="Custom prompt for Aurora (overrides Director's Prompt)"
+                        value={auroraSettings.prompt || ''}
+                        onChange={(e) => setAuroraSettings(s => ({ ...s, prompt: e.target.value }))}
+                      />
+                      <p className="text-[9px] text-neutral-600">If empty, uses the Director's Prompt above</p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Audio Input - Upload or URL */}
+                <div className="space-y-2">
+                  <label className="text-[10px] text-neutral-500 uppercase flex items-center gap-1">
+                    <Music className="w-3 h-3" /> Audio <span className="text-red-500">*</span>
+                  </label>
+
+                  {/* Upload Button */}
+                  <input
+                    ref={audioFileInputRef}
+                    type="file"
+                    accept="audio/wav,audio/mp3,audio/mpeg,audio/x-wav,.wav,.mp3"
+                    className="hidden"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) handleAudioFileUpload(file);
+                      e.target.value = '';
+                    }}
+                  />
+                  <button
+                    onClick={() => audioFileInputRef.current?.click()}
+                    disabled={isUploadingAudio || !projectVideoSettings?.falApiKey}
+                    className={`w-full flex items-center justify-center gap-2 px-3 py-3 rounded-lg border-2 border-dashed transition-all ${isUploadingAudio
+                      ? 'border-purple-600 bg-purple-900/20 text-purple-300 cursor-wait'
+                      : uploadedAudioName
+                        ? 'border-green-700 bg-green-900/20 text-green-300 hover:bg-green-900/30'
+                        : 'border-neutral-700 bg-neutral-800/30 text-neutral-400 hover:border-purple-600 hover:bg-purple-900/10 hover:text-purple-300'
+                      }`}
+                  >
+                    {isUploadingAudio ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        <span className="text-xs">Uploading audio...</span>
+                      </>
+                    ) : uploadedAudioName ? (
+                      <>
+                        <Music className="w-4 h-4" />
+                        <span className="text-xs truncate max-w-[180px]">✓ {uploadedAudioName}</span>
+                      </>
+                    ) : (
+                      <>
+                        <Upload className="w-4 h-4" />
+                        <span className="text-xs">Upload WAV / MP3 file</span>
+                      </>
+                    )}
+                  </button>
+
+                  {/* Record from Mic */}
+                  <button
+                    onClick={isRecording ? stopRecording : startRecording}
+                    disabled={isUploadingAudio || !projectVideoSettings?.falApiKey}
+                    className={`w-full flex items-center justify-center gap-2 px-3 py-3 rounded-lg border-2 transition-all ${isRecording
+                      ? 'border-red-500 bg-red-900/30 text-red-300 animate-pulse'
+                      : 'border-neutral-700 bg-neutral-800/30 text-neutral-400 hover:border-red-600 hover:bg-red-900/10 hover:text-red-300'
+                      }`}
+                  >
+                    {isRecording ? (
+                      <>
+                        <StopCircle className="w-4 h-4" />
+                        <span className="text-xs font-mono">
+                          Stop Recording — {Math.floor(recordingSeconds / 60)}:{(recordingSeconds % 60).toString().padStart(2, '0')} / 1:00
+                        </span>
+                      </>
+                    ) : (
+                      <>
+                        <Mic className="w-4 h-4" />
+                        <span className="text-xs">Record from Mic (max 60s)</span>
+                      </>
+                    )}
+                  </button>
+                  {isRecording && (
+                    <div className="w-full bg-neutral-800 rounded-full h-1.5 overflow-hidden">
+                      <div
+                        className="bg-red-500 h-full transition-all duration-1000 ease-linear"
+                        style={{ width: `${(recordingSeconds / MAX_RECORDING_SECONDS) * 100}%` }}
+                      />
+                    </div>
+                  )}
+
+                  {/* Or paste URL */}
+                  <div className="flex items-center gap-2">
+                    <div className="flex-1 border-t border-neutral-800" />
+                    <span className="text-[9px] text-neutral-600 uppercase">or paste url</span>
+                    <div className="flex-1 border-t border-neutral-800" />
+                  </div>
+                  <input
+                    type="url"
+                    className={`w-full bg-neutral-800 border rounded px-2 py-2 text-xs text-white placeholder-neutral-600 focus:outline-none ${auroraSettings.audioUrl ? 'border-neutral-700' : 'border-red-900/50'
+                      }`}
+                    placeholder="https://example.com/audio.wav"
+                    value={auroraSettings.audioUrl}
+                    onChange={(e) => {
+                      setAuroraSettings(s => ({ ...s, audioUrl: e.target.value }));
+                      setUploadedAudioName(null);
+                    }}
+                  />
+                  <p className="text-[9px] text-neutral-600">Audio drives lip-sync and motion generation</p>
+
+                  {/* Audio Preview Player */}
+                  {auroraSettings.audioUrl && (
+                    <div className="mt-2 bg-neutral-800/50 border border-neutral-700 rounded-lg p-2">
+                      <div className="flex items-center gap-2 mb-1">
+                        <Play className="w-3 h-3 text-purple-400" />
+                        <span className="text-[10px] text-purple-400 uppercase font-bold">Audio Preview</span>
+                        {uploadedAudioName && (
+                          <span className="text-[10px] text-neutral-500 truncate max-w-[120px]">{uploadedAudioName}</span>
+                        )}
+                      </div>
+                      <audio
+                        src={auroraSettings.audioUrl}
+                        controls
+                        className="w-full h-8"
+                        style={{ filter: 'invert(1) hue-rotate(180deg)', opacity: 0.8 }}
+                      />
+                    </div>
+                  )}
+                </div>
+
+                {/* API Key Warning */}
+                {!projectVideoSettings?.falApiKey && (
+                  <div className="text-xs text-purple-400 bg-purple-900/20 border border-purple-900/30 rounded px-2 py-1">
+                    ⚠️ Add fal.ai API key in Project Settings
+                  </div>
+                )}
+
+                {/* Audio URL Required Warning */}
+                {projectVideoSettings?.falApiKey && !auroraSettings.audioUrl && (
+                  <div className="text-xs text-purple-400 bg-purple-900/20 border border-purple-900/30 rounded px-2 py-1">
+                    ⚠️ Audio URL is required for Lip Sync generation
+                  </div>
+                )}
+
+                {/* Last Frame Indicator */}
+                {shot.videoUrl && (
+                  <div className="text-xs text-blue-400 bg-blue-900/20 border border-blue-900/30 rounded px-2 py-1 flex items-center gap-1">
+                    🎬 Last frame of existing video will be used as source image
+                  </div>
+                )}
+
+                {/* Generate Button */}
+                <Button
+                  variant="primary"
+                  onClick={() => onGenerateAurora(shot.id, {
+                    ...auroraSettings,
+                    prompt: auroraSettings.prompt || displayPrompt,
+                  })}
+                  disabled={shot.isVideoGenerating || shot.isExtending || !shot.imageUrl || !projectVideoSettings?.falApiKey || !auroraSettings.audioUrl}
+                  className="w-full h-12 bg-purple-600 hover:bg-purple-700"
+                >
+                  {shot.videoUrl ? 'Regenerate Lip Sync' : 'Generate Lip Sync'}
                 </Button>
               </div>
             )}

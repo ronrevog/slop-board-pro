@@ -202,3 +202,178 @@ export const cancelWanVideo = async (
     console.warn('Cancel not supported via fal SDK');
     return false;
 };
+
+// ============================================================
+// File Upload via fal.ai Storage
+// ============================================================
+
+/**
+ * Upload a file to fal.ai storage and return a hosted URL
+ * Useful for uploading audio files for Aurora/Lip Sync
+ */
+export const uploadFileToFal = async (file: File, falApiKey: string): Promise<string> => {
+    if (!falApiKey) {
+        throw new Error('fal.ai API key is required for file upload.');
+    }
+
+    const cleanKey = falApiKey.trim().replace(/^Key\s+/i, '');
+    fal.config({
+        credentials: cleanKey
+    });
+
+    try {
+        const url = await fal.storage.upload(file);
+        console.log('File uploaded to fal.ai storage:', url);
+        return url;
+    } catch (error: any) {
+        console.error('fal.ai file upload error:', error);
+        if (error.status === 401 || error.message?.includes('401')) {
+            throw new Error('fal.ai API key is invalid. Please check your key in Settings.');
+        }
+        throw new Error(error.message || 'File upload failed');
+    }
+};
+
+// ============================================================
+// Creatify Aurora - Image-to-Video with Audio
+// ============================================================
+
+export interface AuroraVideoInput {
+    image_url: string;
+    audio_url: string;
+    prompt?: string;
+    guidance_scale?: number;
+    audio_guidance_scale?: number;
+    resolution?: '480p' | '720p';
+}
+
+export interface AuroraVideoOutput {
+    video: {
+        url: string;
+        content_type?: string;
+        file_name?: string;
+        file_size?: number;
+        width?: number;
+        height?: number;
+        fps?: number;
+        duration?: number;
+        num_frames?: number;
+    };
+}
+
+export interface AuroraGenerationSettings {
+    resolution: '480p' | '720p';
+    guidanceScale: number;
+    audioGuidanceScale: number;
+    audioUrl: string;
+    prompt?: string;
+}
+
+/**
+ * Generate a video using Creatify Aurora via fal.ai SDK
+ * Aurora is an image-to-video model that accepts audio input for audio-driven video generation.
+ * @param imageUrl - Base64 or URL of the source image
+ * @param settings - Aurora generation settings (resolution, guidance scales, audio URL)
+ * @param falApiKey - The fal.ai API key
+ * @param onProgress - Optional callback for progress updates
+ * @returns Base64 data URL of the generated video
+ */
+export const generateAuroraVideo = async (
+    imageUrl: string,
+    settings: AuroraGenerationSettings,
+    falApiKey: string,
+    onProgress?: (status: string, position?: number) => void
+): Promise<string> => {
+    if (!falApiKey) {
+        throw new Error('fal.ai API key is required. Please add it in project settings.');
+    }
+
+    if (!settings.audioUrl) {
+        throw new Error('Audio URL is required for Aurora video generation. Provide a WAV/MP3 URL.');
+    }
+
+    // Configure fal client with credentials
+    const cleanKey = falApiKey.trim().replace(/^Key\s+/i, '');
+    fal.config({
+        credentials: cleanKey
+    });
+
+    // Prepare the image URL
+    const preparedImageUrl = await prepareImageUrl(imageUrl);
+
+    // Build the input
+    const input: AuroraVideoInput = {
+        image_url: preparedImageUrl,
+        audio_url: settings.audioUrl,
+        prompt: settings.prompt || undefined,
+        guidance_scale: settings.guidanceScale,
+        audio_guidance_scale: settings.audioGuidanceScale,
+        resolution: settings.resolution,
+    };
+
+    console.log('Submitting to fal.ai Creatify Aurora via SDK:', {
+        ...input,
+        image_url: input.image_url.substring(0, 50) + '...',
+    });
+    onProgress?.('Submitting to Creatify Aurora...');
+
+    try {
+        // Use fal.subscribe for queue-based generation with progress updates
+        const result = await fal.subscribe('fal-ai/creatify/aurora', {
+            input,
+            logs: true,
+            onQueueUpdate: (update) => {
+                if (update.status === 'IN_QUEUE') {
+                    const position = (update as any).queue_position;
+                    onProgress?.('In queue...', position);
+                    console.log('Aurora queue position:', position);
+                } else if (update.status === 'IN_PROGRESS') {
+                    onProgress?.('Generating Aurora video...');
+                    console.log('Aurora generation in progress...');
+                    if (update.logs) {
+                        update.logs.forEach(log => console.log('Aurora log:', log.message));
+                    }
+                }
+            },
+        });
+
+        console.log('Aurora result:', result);
+
+        const videoData = result.data as AuroraVideoOutput;
+
+        if (!videoData?.video?.url) {
+            throw new Error('No video URL in Aurora result');
+        }
+
+        console.log('Aurora video generated:', videoData.video.url);
+        onProgress?.('Downloading video...');
+
+        // Fetch the video and convert to base64
+        try {
+            const videoResponse = await fetch(videoData.video.url);
+            if (!videoResponse.ok) {
+                throw new Error('Failed to download Aurora video');
+            }
+            const blob = await videoResponse.blob();
+            return await blobToBase64(blob);
+        } catch (fetchError) {
+            console.warn('Could not fetch Aurora video blob, returning URL:', fetchError);
+            return videoData.video.url;
+        }
+    } catch (error: any) {
+        console.error('Aurora SDK error:', error);
+
+        // Handle specific error types
+        if (error.status === 401 || error.message?.includes('401')) {
+            throw new Error('fal.ai API key is invalid. Please check your key in Settings.');
+        }
+        if (error.status === 403 || error.message?.includes('403')) {
+            throw new Error('fal.ai API key does not have permission for the Aurora model.');
+        }
+        if (error.message?.includes('CORS') || error.message?.includes('Load failed')) {
+            throw new Error('Network error - please check your connection and try again.');
+        }
+
+        throw new Error(error.message || 'Aurora video generation failed');
+    }
+};

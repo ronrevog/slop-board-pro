@@ -1,6 +1,6 @@
 
 import { GoogleGenAI } from "@google/genai";
-import { CinematicSettings, Character, Location, Shot } from "../types";
+import { CinematicSettings, Character, Location, Shot, ChatMessage } from "../types";
 import { ANAMORPHIC_LENS_PROMPTS } from "../constants";
 
 // Helper to sanitize JSON strings
@@ -16,6 +16,52 @@ const stripBase64Header = (base64: string) => {
 
 const getMimeType = (base64: string) => {
   return base64.match(/^data:(image\/\w+);base64,/)?.[1] || "image/jpeg";
+};
+
+// Map project resolution to Gemini image generation imageSize
+// 'basic' returns '2K' (original default behavior)
+const mapResolutionToImageSize = (resolution: string): string => {
+  const mapping: Record<string, string> = {
+    'basic': '2K',
+    '720p': '1K',
+    '1080p': '2K',
+    '4k': '4K',
+  };
+  return mapping[resolution] || '2K';
+};
+
+// Map project resolution to Veo video resolution parameter
+// 'basic' returns null — callers should fall back to model-dependent resolution
+const mapResolutionToVideoRes = (resolution: string, model?: 'fast' | 'quality'): string => {
+  if (resolution === 'basic' || !resolution) {
+    // Original behavior: quality=1080p, fast=720p
+    return model === 'quality' ? '1080p' : '720p';
+  }
+  const mapping: Record<string, string> = {
+    '720p': '720p',
+    '1080p': '1080p',
+    '4k': '4k',
+  };
+  return mapping[resolution] || '720p';
+};
+
+// Map project aspect ratio to Gemini API-supported ratios
+const mapAspectRatio = (ratio: string): string => {
+  // Gemini supports: 1:1, 2:3, 3:2, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, 21:9
+  const mapping: Record<string, string> = {
+    '1:1': '1:1',
+    '2:3': '2:3',
+    '3:2': '3:2',
+    '3:4': '3:4',
+    '4:3': '4:3',
+    '4:5': '4:5',
+    '5:4': '5:4',
+    '9:16': '9:16',
+    '16:9': '16:9',
+    '21:9': '21:9',
+    '2.39:1': '21:9', // Cinemascope maps to ultra-wide
+  };
+  return mapping[ratio] || '16:9';
 };
 
 // Helper to convert Blob to Base64
@@ -704,6 +750,52 @@ export const breakdownScript = async (
 };
 
 /**
+ * Selects adjacent shots from the same scene for visual continuity.
+ * Prioritizes nearest neighbors (alternating before/after) and only includes shots with images.
+ * Skips the current shot and any explicitly set reference shot.
+ */
+const getAdjacentShotsWithImages = (
+  currentShot: Shot,
+  allShots: Shot[],
+  maxCount: number = 5,
+  excludeIds: string[] = []
+): Shot[] => {
+  const currentIndex = allShots.findIndex(s => s.id === currentShot.id);
+  if (currentIndex === -1) return [];
+
+  const excludeSet = new Set([currentShot.id, ...excludeIds]);
+  const result: Shot[] = [];
+
+  // Alternate: 1 before, 1 after, 2 before, 2 after, etc.
+  for (let offset = 1; result.length < maxCount; offset++) {
+    const beforeIdx = currentIndex - offset;
+    const afterIdx = currentIndex + offset;
+    const hasBefore = beforeIdx >= 0;
+    const hasAfter = afterIdx < allShots.length;
+
+    if (!hasBefore && !hasAfter) break;
+
+    if (hasBefore) {
+      const shot = allShots[beforeIdx];
+      if (shot.imageUrl && !excludeSet.has(shot.id)) {
+        result.push(shot);
+        if (result.length >= maxCount) break;
+      }
+    }
+
+    if (hasAfter) {
+      const shot = allShots[afterIdx];
+      if (shot.imageUrl && !excludeSet.has(shot.id)) {
+        result.push(shot);
+        if (result.length >= maxCount) break;
+      }
+    }
+  }
+
+  return result;
+};
+
+/**
  * Generates an image for a Character or Location asset.
  * Uses gemini-3-pro-image-preview for maximum quality.
  */
@@ -865,11 +957,7 @@ export const generateShotImage = async (
     ${isAnamorphicLens ? '6. Apply classic anamorphic lens characteristics: oval bokeh, blue horizontal flares, and cinematic depth.' : ''}
   `;
 
-  // Map aspect ratio
-  let targetRatio = "16:9";
-  if (settings.aspectRatio === '4:3') targetRatio = "4:3";
-  if (settings.aspectRatio === '1:1') targetRatio = "1:1";
-  if (settings.aspectRatio === '9:16') targetRatio = "9:16";
+  const targetRatio = mapAspectRatio(settings.aspectRatio);
 
   // ATTEMPT 1: MULTIMODAL (Images + Text)
   try {
@@ -906,22 +994,40 @@ CRITICAL: This must look like a DIFFERENT CAMERA ANGLE of the SAME SCENE - not a
 
       parts.push({ text: editPrompt });
 
-      // Still add character references for additional consistency
-      activeCharacters.forEach(char => {
-        if (char.imageUrl) {
-          parts.push({
-            inlineData: {
-              mimeType: getMimeType(char.imageUrl),
-              data: stripBase64Header(char.imageUrl)
-            }
-          });
-          parts.push({ text: `This is "${char.name}" - the character in the scene. Maintain this exact appearance.` });
-        }
+      // Add ALL character references for consistency (up to 5)
+      const refCharsWithImages = allCharacters.filter(c => c.imageUrl);
+      refCharsWithImages.slice(0, 5).forEach(char => {
+        parts.push({
+          inlineData: {
+            mimeType: getMimeType(char.imageUrl!),
+            data: stripBase64Header(char.imageUrl!)
+          }
+        });
+        const isActive = shot.characters.includes(char.id);
+        parts.push({
+          text: isActive
+            ? `REFERENCE_CHARACTER_IN_SHOT: "${char.name}" — MUST appear in this shot. Use this EXACT appearance.`
+            : `REFERENCE_CHARACTER_AVAILABLE: "${char.name}" — for scene consistency.`
+        });
+      });
+
+      // Add adjacent shots for continuity (up to 3 in edit mode)
+      const refAdjacentShots = getAdjacentShotsWithImages(shot, allShots, 3, [referenceShot.id]);
+      refAdjacentShots.forEach((adjShot, idx) => {
+        parts.push({
+          inlineData: {
+            mimeType: getMimeType(adjShot.imageUrl!),
+            data: stripBase64Header(adjShot.imageUrl!)
+          }
+        });
+        parts.push({
+          text: `REFERENCE_ADJACENT_SHOT_${idx + 1}: Nearby Shot #${adjShot.number} — maintain visual continuity with this shot.`
+        });
       });
 
     } else {
-      // NO REFERENCE - normal generation with character/location references
-      // IMPORTANT: Include both character AND location references
+      // NO REFERENCE - normal generation with maximum reference images for consistency
+      // Strategy: Location (1) + All Characters with images (up to 5) + Adjacent shots (up to 5) = ~11-14 refs
 
       // 1. Inject Location Reference Image FIRST (sets the scene)
       if (activeLocation && activeLocation.imageUrl) {
@@ -939,26 +1045,48 @@ Do NOT create a different room - use THIS room.`
         });
       }
 
-      // 2. Inject Character Reference Images
-      activeCharacters.forEach(char => {
-        if (char.imageUrl) {
+      // 2. Inject ALL Character Reference Images (not just active ones - for scene awareness)
+      // Active characters get stronger labels, others are "available in scene"
+      const charsWithImages = allCharacters.filter(c => c.imageUrl);
+      charsWithImages.slice(0, 5).forEach(char => {
+        parts.push({
+          inlineData: {
+            mimeType: getMimeType(char.imageUrl!),
+            data: stripBase64Header(char.imageUrl!)
+          }
+        });
+        const isActive = shot.characters.includes(char.id);
+        parts.push({
+          text: isActive
+            ? `REFERENCE_CHARACTER_IN_SHOT: This is "${char.name}" — this character MUST appear in this shot.
+⚠️ CRITICAL: Use this EXACT person's face, hair, skin tone, and clothing. Do NOT create a different person.`
+            : `REFERENCE_CHARACTER_AVAILABLE: This is "${char.name}" — available in the scene for context/consistency.
+Use this appearance if this character appears in the background or is referenced.`
+        });
+      });
+
+      // 3. Inject Adjacent Scene Shots for visual continuity (up to 5)
+      const adjacentShots = getAdjacentShotsWithImages(shot, allShots, 5);
+      if (adjacentShots.length > 0) {
+        adjacentShots.forEach((adjShot, idx) => {
           parts.push({
             inlineData: {
-              mimeType: getMimeType(char.imageUrl),
-              data: stripBase64Header(char.imageUrl)
+              mimeType: getMimeType(adjShot.imageUrl!),
+              data: stripBase64Header(adjShot.imageUrl!)
             }
           });
           parts.push({
-            text: `REFERENCE_IMAGE_CHARACTER: This is "${char.name}". 
-⚠️ CRITICAL: You MUST use this EXACT person's face, hair, skin tone, and clothing.
-Do NOT create a different person - use THIS person.`
+            text: `REFERENCE_ADJACENT_SHOT_${idx + 1}: This is nearby Shot #${adjShot.number} from the same scene.
+Maintain visual continuity: same color grade, lighting, environment details, and character appearances as this shot.`
           });
-        }
-      });
+        });
+      }
 
       // Add main prompt for normal generation
       parts.push({ text: mainPromptText });
     }
+
+    const targetImageSize = mapResolutionToImageSize(settings.resolution || '1080p');
 
     const response = await ai.models.generateContent({
       model: 'gemini-3-pro-image-preview',
@@ -966,7 +1094,7 @@ Do NOT create a different person - use THIS person.`
       config: {
         imageConfig: {
           aspectRatio: targetRatio,
-          imageSize: '2K'
+          imageSize: targetImageSize
         }
       }
     });
@@ -994,13 +1122,15 @@ Do NOT create a different person - use THIS person.`
        </visual_fallback_references>
        `;
 
+      const fallbackImageSize = mapResolutionToImageSize(settings.resolution || '1080p');
+
       const response = await ai.models.generateContent({
         model: 'gemini-3-pro-image-preview',
         contents: { parts: [{ text: fallbackPrompt }] },
         config: {
           imageConfig: {
             aspectRatio: targetRatio,
-            imageSize: '2K'
+            imageSize: fallbackImageSize
           }
         }
       });
@@ -1074,19 +1204,24 @@ export const alterShotImage = async (
     parts.push({ text: `REFERENCE_SCENE_CONTINUITY: Also consider this shot (Shot #${referenceShot.number}) for environmental consistency.` });
   }
 
-  // 3. Inject Asset References
-  activeCharacters.forEach(char => {
-    if (char.imageUrl) {
-      parts.push({
-        inlineData: {
-          mimeType: getMimeType(char.imageUrl),
-          data: stripBase64Header(char.imageUrl)
-        }
-      });
-      parts.push({ text: `REFERENCE_CHARACTER: "${char.name}".` });
-    }
+  // 3. Inject ALL Character References (not just active — for scene awareness, up to 5)
+  const alterCharsWithImages = allCharacters.filter(c => c.imageUrl);
+  alterCharsWithImages.slice(0, 5).forEach(char => {
+    parts.push({
+      inlineData: {
+        mimeType: getMimeType(char.imageUrl!),
+        data: stripBase64Header(char.imageUrl!)
+      }
+    });
+    const isActive = shot.characters.includes(char.id);
+    parts.push({
+      text: isActive
+        ? `REFERENCE_CHARACTER_IN_SHOT: "${char.name}" — MUST appear. Use this EXACT appearance.`
+        : `REFERENCE_CHARACTER_AVAILABLE: "${char.name}" — for scene consistency.`
+    });
   });
 
+  // 4. Inject Location Reference
   if (activeLocation && activeLocation.imageUrl) {
     parts.push({
       inlineData: {
@@ -1096,6 +1231,21 @@ export const alterShotImage = async (
     });
     parts.push({ text: `REFERENCE_LOCATION: "${activeLocation.name}".` });
   }
+
+  // 5. Inject Adjacent Scene Shots for continuity (up to 3)
+  const alterExcludeIds = referenceShot ? [referenceShot.id] : [];
+  const alterAdjacentShots = getAdjacentShotsWithImages(shot, allShots, 3, alterExcludeIds);
+  alterAdjacentShots.forEach((adjShot, idx) => {
+    parts.push({
+      inlineData: {
+        mimeType: getMimeType(adjShot.imageUrl!),
+        data: stripBase64Header(adjShot.imageUrl!)
+      }
+    });
+    parts.push({
+      text: `REFERENCE_ADJACENT_SHOT_${idx + 1}: Nearby Shot #${adjShot.number} — maintain visual continuity.`
+    });
+  });
 
   // Check if using Panavision C-Series Anamorphic lens
   const isAnamorphicLens = settings.lens.startsWith("Panavision C-Series");
@@ -1149,11 +1299,7 @@ export const alterShotImage = async (
 
   parts.push({ text: mainPrompt });
 
-  // Map aspect ratio
-  let targetRatio = "16:9";
-  if (settings.aspectRatio === '4:3') targetRatio = "4:3";
-  if (settings.aspectRatio === '1:1') targetRatio = "1:1";
-  if (settings.aspectRatio === '9:16') targetRatio = "9:16";
+  const targetRatio = mapAspectRatio(settings.aspectRatio);
 
   try {
     const response = await ai.models.generateContent({
@@ -1162,7 +1308,7 @@ export const alterShotImage = async (
       config: {
         imageConfig: {
           aspectRatio: targetRatio,
-          imageSize: '2K'
+          imageSize: mapResolutionToImageSize(settings.resolution || '1080p')
         }
       }
     });
@@ -1276,6 +1422,319 @@ INSTRUCTIONS:
   }
 };
 
+/**
+ * Upscales an image to 4K resolution using Gemini's image generation.
+ * Sends the existing image back through the model at 4K output size with
+ * a preservation-focused prompt to maintain exact composition and details.
+ */
+export const upscaleImage = async (
+  base64Image: string,
+  aspectRatio: string = '16:9'
+): Promise<string> => {
+  const ai = getAI();
+  const mimeType = getMimeType(base64Image);
+  const data = stripBase64Header(base64Image);
+  const targetRatio = mapAspectRatio(aspectRatio);
+
+  const prompt = `Upscale this image to maximum resolution. 
+
+CRITICAL RULES:
+- Do NOT change ANYTHING about the image content
+- Preserve the EXACT same composition, framing, and camera angle
+- Preserve ALL characters, their faces, clothing, poses, and expressions exactly
+- Preserve the EXACT same environment, lighting, colors, and atmosphere
+- Preserve all text, logos, or fine details exactly as they are
+- ONLY increase the resolution, sharpness, and fine detail
+- Enhance texture detail, skin pores, fabric weave, and surface detail
+- The output must be pixel-perfect identical to the input, just at higher resolution`;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-3-pro-image-preview',
+      contents: {
+        parts: [
+          {
+            inlineData: {
+              mimeType: mimeType,
+              data: data
+            }
+          },
+          { text: prompt }
+        ]
+      },
+      config: {
+        imageConfig: {
+          aspectRatio: targetRatio,
+          imageSize: '4K'
+        }
+      }
+    });
+
+    if (response.candidates && response.candidates.length > 0) {
+      for (const part of response.candidates[0].content.parts) {
+        if (part.inlineData) {
+          return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
+        }
+      }
+    }
+
+    throw new Error("No image generated from upscale");
+  } catch (error) {
+    console.error("Upscale Error:", error);
+    throw error;
+  }
+};
+
+/**
+ * Generates a character turnaround — 4 views of the same character.
+ * Returns an array of {angle, imageUrl} for: Front, 3/4 Right, Profile Right, Back.
+ * Uses the character's existing image as the reference.
+ */
+export const generateLocationTurnaround = async (
+  location: Location,
+  settings: CinematicSettings
+): Promise<Array<{ angle: string; imageUrl: string }>> => {
+  const ai = getAI();
+
+  if (!location.imageUrl) throw new Error("Location must have an image for turnaround generation");
+
+  const angles = [
+    { angle: 'Wide Establishing', prompt: 'wide establishing shot showing the full exterior or full room, maximum environmental context' },
+    { angle: 'Interior Detail', prompt: 'medium shot focusing on the key architectural or design details, furniture, and practical elements of the space' },
+    { angle: 'Alternate Angle', prompt: 'shot from the opposite end or corner of the space, revealing what was behind the camera in the original image' },
+    { angle: 'Atmosphere / Mood', prompt: 'moody atmospheric shot emphasizing lighting, shadows, and the emotional quality of the space' },
+  ];
+
+  const results: Array<{ angle: string; imageUrl: string }> = [];
+
+  for (const { angle, prompt } of angles) {
+    try {
+      const parts: any[] = [
+        {
+          inlineData: {
+            mimeType: getMimeType(location.imageUrl),
+            data: stripBase64Header(location.imageUrl)
+          }
+        },
+        {
+          text: `EDIT THIS IMAGE. This is a location called "${location.name}".
+${location.description ? `Location description: ${location.description}` : ''}
+${(location as any).timeOfDay ? `Time of day: ${(location as any).timeOfDay}` : ''}
+${(location as any).weather ? `Weather: ${(location as any).weather}` : ''}
+${(location as any).atmosphere ? `Atmosphere: ${(location as any).atmosphere}` : ''}
+
+TASK: Generate a ${angle} of this EXACT SAME location.
+
+ANGLE: ${prompt}
+
+CRITICAL RULES:
+- This must be the EXACT SAME location — same architecture, same colors, same furniture, same props
+- Same time of day and lighting conditions
+- Same weather and atmosphere
+- Professional cinematic location reference quality
+- Cinematic lighting: ${settings.lighting}
+- Cinematographer style: ${settings.cinematographer}
+- Shot on ${settings.filmStock}
+- Do NOT change the location's identity or design in any way`
+        }
+      ];
+
+      const response = await ai.models.generateContent({
+        model: 'gemini-3-pro-image-preview',
+        contents: { parts },
+        config: {
+          imageConfig: {
+            aspectRatio: '16:9',
+            imageSize: '2K'
+          }
+        }
+      });
+
+      if (response.candidates && response.candidates.length > 0) {
+        for (const part of response.candidates[0].content.parts) {
+          if (part.inlineData) {
+            results.push({
+              angle,
+              imageUrl: `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`
+            });
+            break;
+          }
+        }
+      }
+    } catch (e) {
+      console.error(`Location turnaround failed for ${angle}:`, e);
+    }
+  }
+
+  if (results.length === 0) {
+    throw new Error("All location turnaround angles failed to generate");
+  }
+
+  return results;
+};
+
+export const generateCharacterTurnaround = async (
+  character: Character,
+  settings: CinematicSettings
+): Promise<Array<{ angle: string; imageUrl: string }>> => {
+  const ai = getAI();
+
+  if (!character.imageUrl) throw new Error("Character must have an image for turnaround generation");
+
+  const angles = [
+    { angle: 'Front View', prompt: 'facing directly toward the camera, straight-on front view, symmetrical pose, arms relaxed at sides' },
+    { angle: '3/4 Right View', prompt: 'turned approximately 45 degrees to the right, three-quarter view showing both eyes, classic portrait angle' },
+    { angle: 'Profile Right', prompt: 'turned 90 degrees to the right, perfect side profile view, showing silhouette of nose, chin, and forehead' },
+    { angle: 'Back View', prompt: 'turned completely away from camera, showing the back of head, shoulders, and full back, rear view' },
+  ];
+
+  const results: Array<{ angle: string; imageUrl: string }> = [];
+
+  for (const { angle, prompt } of angles) {
+    try {
+      const parts: any[] = [
+        {
+          inlineData: {
+            mimeType: getMimeType(character.imageUrl),
+            data: stripBase64Header(character.imageUrl)
+          }
+        },
+        {
+          text: `EDIT THIS IMAGE. This is a character named "${character.name}".
+${character.description ? `Character description: ${character.description}` : ''}
+${character.wardrobe ? `Wardrobe: ${character.wardrobe}` : ''}
+${character.physicalFeatures ? `Physical features: ${character.physicalFeatures}` : ''}
+
+TASK: Generate a ${angle} of this EXACT SAME person.
+
+POSE: ${prompt}
+
+CRITICAL RULES:
+- This must be the EXACT SAME PERSON — same face, same hair, same skin tone, same body type
+- Same clothing/wardrobe — identical outfit, colors, textures, accessories
+- Clean studio background (neutral gray or white)
+- Full body or 3/4 body framing, centered in frame
+- Professional character reference sheet quality
+- Cinematic lighting: ${settings.lighting}
+- Shot on ${settings.filmStock}
+- Do NOT change the person's identity, age, or appearance in any way`
+        }
+      ];
+
+      const response = await ai.models.generateContent({
+        model: 'gemini-3-pro-image-preview',
+        contents: { parts },
+        config: {
+          imageConfig: {
+            aspectRatio: '3:4',
+            imageSize: '2K'
+          }
+        }
+      });
+
+      if (response.candidates && response.candidates.length > 0) {
+        for (const part of response.candidates[0].content.parts) {
+          if (part.inlineData) {
+            results.push({
+              angle,
+              imageUrl: `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`
+            });
+            break;
+          }
+        }
+      }
+    } catch (e) {
+      console.error(`Turnaround generation failed for ${angle}:`, e);
+      // Continue with other angles even if one fails
+    }
+  }
+
+  if (results.length === 0) {
+    throw new Error("All turnaround angles failed to generate");
+  }
+
+  return results;
+};
+
+/**
+ * Multi-turn chat image editing. Sends the current image along with the full conversation
+ * history so the model understands the chain of edits and can apply the latest instruction
+ * with awareness of all previous refinements.
+ */
+export const chatEditImage = async (
+  currentImage: string,
+  chatHistory: ChatMessage[],
+  newPrompt: string,
+  aspectRatio: string = '16:9'
+): Promise<string> => {
+  const ai = getAI();
+  const targetRatio = mapAspectRatio(aspectRatio);
+
+  const parts: any[] = [];
+
+  // Inject the current image as primary reference
+  parts.push({
+    inlineData: {
+      mimeType: getMimeType(currentImage),
+      data: stripBase64Header(currentImage)
+    }
+  });
+
+  // Build conversation context from history (text only — keeps token usage reasonable)
+  if (chatHistory.length > 0) {
+    let conversationContext = "EDIT HISTORY (previous refinements applied to this image):\n";
+    chatHistory.forEach((msg, idx) => {
+      if (msg.role === 'user') {
+        conversationContext += `  [Edit ${Math.floor(idx / 2) + 1}]: "${msg.text}"\n`;
+      } else if (msg.role === 'assistant') {
+        conversationContext += `  → Applied successfully\n`;
+      }
+    });
+    conversationContext += "\nThe image above is the CURRENT STATE after all previous edits.\n";
+    parts.push({ text: conversationContext });
+  }
+
+  // The new edit instruction
+  parts.push({
+    text: `NOW APPLY THIS NEW EDIT to the image above:
+
+"${newPrompt}"
+
+RULES:
+- PRESERVE everything from previous edits that is not contradicted by this new instruction
+- Only change what the instruction specifically asks for
+- Maintain photorealism, cinematic quality, and existing style
+- Keep the same composition and framing unless the instruction asks to change it
+- This is an iterative refinement — build upon the current image, don't start over`
+  });
+
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-3-pro-image-preview',
+      contents: { parts },
+      config: {
+        imageConfig: {
+          aspectRatio: targetRatio,
+          imageSize: '2K'
+        }
+      }
+    });
+
+    if (response.candidates && response.candidates.length > 0) {
+      for (const part of response.candidates[0].content.parts) {
+        if (part.inlineData) {
+          return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
+        }
+      }
+    }
+
+    throw new Error("No image generated from chat edit");
+  } catch (error) {
+    console.error("Chat Edit Error:", error);
+    throw error;
+  }
+};
+
 export const editImage = async (base64Image: string, prompt: string): Promise<string> => {
   const ai = getAI();
   const mimeType = getMimeType(base64Image);
@@ -1334,12 +1793,14 @@ export const generateShotVideo = async (
   try {
     console.log("Starting video generation with model:", modelName);
 
+    const videoRes = mapResolutionToVideoRes(settings.resolution || 'basic', model);
+
     const inputs: any = {
       model: modelName,
       prompt: prompt,
       config: {
         numberOfVideos: 1,
-        resolution: model === 'quality' ? '1080p' : '720p',
+        resolution: videoRes,
         aspectRatio: settings.aspectRatio === '9:16' ? '9:16' : '16:9'
       }
     };
@@ -1449,7 +1910,7 @@ export const extendShotVideo = async (
       },
       config: {
         numberOfVideos: 1,
-        resolution: model === 'quality' ? '1080p' : '720p',
+        resolution: mapResolutionToVideoRes(settings.resolution || 'basic', model),
         aspectRatio: settings.aspectRatio === '9:16' ? '9:16' : '16:9'
       }
     };

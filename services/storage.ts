@@ -64,7 +64,13 @@ export const exportProjectsToFile = async () => {
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   const date = new Date().toISOString().split('T')[0];
-  link.download = `slop-board-backup-${date}.json`;
+  // Include project names in the filename
+  const projectNames = projects
+    .map(p => (p.title || 'untitled').replace(/[^a-z0-9]/gi, '-').toLowerCase())
+    .slice(0, 3) // Limit to first 3 names to keep filename reasonable
+    .join('_');
+  const suffix = projects.length > 3 ? `_and-${projects.length - 3}-more` : '';
+  link.download = `${projectNames}${suffix}-backup-${date}.json`;
   link.href = url;
   document.body.appendChild(link);
   link.click();

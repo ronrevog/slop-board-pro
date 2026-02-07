@@ -1,5 +1,5 @@
 
-export type AspectRatio = '16:9' | '9:16' | '2.39:1' | '4:3' | '1:1';
+export type AspectRatio = '1:1' | '2:3' | '3:2' | '3:4' | '4:3' | '4:5' | '5:4' | '9:16' | '16:9' | '21:9' | '2.39:1';
 
 export type ShotType =
   | 'Extreme Wide'
@@ -28,16 +28,19 @@ export type CameraMove =
   | 'Zoom Out'
   | 'Whip Pan';
 
+export type Resolution = 'basic' | '720p' | '1080p' | '4k';
+
 export interface CinematicSettings {
   cinematographer: string;
   filmStock: string;
   lens: string;
   lighting: string;
   aspectRatio: AspectRatio;
+  resolution: Resolution;
   colorGrade: string;
 }
 
-export type VideoProvider = 'veo' | 'fal-wan';
+export type VideoProvider = 'veo' | 'fal-wan' | 'fal-aurora';
 
 export interface VideoProviderSettings {
   provider: VideoProvider;
@@ -51,6 +54,19 @@ export interface VideoProviderSettings {
   wanNegativePrompt: string;
   wanSeed?: number;
   wanAudioUrl?: string;
+  // Aurora (Creatify) specific settings
+  auroraResolution: '480p' | '720p';
+  auroraGuidanceScale: number;
+  auroraAudioGuidanceScale: number;
+  auroraAudioUrl?: string;
+  auroraPrompt?: string;
+}
+
+export interface TurnaroundImage {
+  id: string;
+  angle: string;
+  imageUrl: string;
+  isSelected: boolean; // Whether this image is selected as a reference for shot generation
 }
 
 export interface Character {
@@ -59,6 +75,8 @@ export interface Character {
   description: string;
   imageUrl?: string; // Base64
   originalImageUrl?: string; // Base64 - stores the first generated/uploaded image for reset
+  turnaroundImages?: TurnaroundImage[]; // Multiple angle views
+  isTurnaroundGenerating?: boolean;
   isGenerating?: boolean;
   isEditing?: boolean;
   isUpdating?: boolean; // For "Update with Details" operation
@@ -77,6 +95,8 @@ export interface Location {
   description: string;
   imageUrl?: string; // Base64
   originalImageUrl?: string; // Base64 - stores the first generated/uploaded image for reset
+  turnaroundImages?: TurnaroundImage[]; // Multiple angle views of the location
+  isTurnaroundGenerating?: boolean;
   isGenerating?: boolean;
   isEditing?: boolean;
   isUpdating?: boolean; // For "Update with Details" operation
@@ -87,6 +107,14 @@ export interface Location {
   keyProps?: string;
   soundAmbience?: string;
   practicalLighting?: string;
+}
+
+export interface ChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  text: string;
+  imageUrl?: string; // The resulting image after this edit
+  timestamp: number;
 }
 
 export interface DialogueLine {
@@ -133,6 +161,9 @@ export interface Shot {
   isGenerating: boolean;
   isEditing: boolean;
   isAltering?: boolean;
+  isUpscaling?: boolean;
+  isChatEditing?: boolean;
+  chatHistory?: ChatMessage[]; // Multi-turn chat editing history
   notes?: string;
 }
 
@@ -167,4 +198,7 @@ export const DEFAULT_VIDEO_SETTINGS: VideoProviderSettings = {
   wanEnablePromptExpansion: true,
   wanMultiShots: false,
   wanNegativePrompt: '',
+  auroraResolution: '720p',
+  auroraGuidanceScale: 1,
+  auroraAudioGuidanceScale: 2,
 };

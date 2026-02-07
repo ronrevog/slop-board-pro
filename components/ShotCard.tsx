@@ -1,8 +1,20 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Shot, Character, Location, ImageHistoryEntry } from '../types';
-import { Camera, RefreshCw, SendHorizontal, MessageSquare, MapPin, Users, Edit3, Trash2, Upload, Download, Maximize2, Wand2, Plus, X, Link, Copy, Focus, History, RotateCcw } from 'lucide-react';
+import { Shot, Character, Location, ImageHistoryEntry, ChatMessage } from '../types';
+import { Camera, RefreshCw, SendHorizontal, MessageSquare, MapPin, Users, Edit3, Trash2, Upload, Download, Maximize2, Wand2, Plus, X, Link, Copy, Focus, History, RotateCcw, MonitorPlay, ArrowUpFromLine, MessageCircle } from 'lucide-react';
 import { Button } from './Button';
+import { ASPECT_RATIOS } from '../constants';
+import { AspectRatio } from '../types';
+
+// Convert aspect ratio string to numeric value for CSS
+const getAspectRatioValue = (ratio: string): string => {
+  const map: Record<string, string> = {
+    '1:1': '1/1', '2:3': '2/3', '3:2': '3/2', '3:4': '3/4', '4:3': '4/3',
+    '4:5': '4/5', '5:4': '5/4', '9:16': '9/16', '16:9': '16/9', '21:9': '21/9',
+    '2.39:1': '2.39/1',
+  };
+  return map[ratio] || '16/9';
+};
 
 interface ShotCardProps {
   shot: Shot;
@@ -10,6 +22,8 @@ interface ShotCardProps {
   allCharacters: Character[];
   allLocations: Location[];
   allShots: Shot[];
+  aspectRatio?: AspectRatio;
+  onAspectRatioChange?: (ratio: string) => void;
   onGenerate: (id: string) => void;
   onAlter: (id: string) => void;
   onEditImage: (id: string, prompt: string) => void;
@@ -18,8 +32,10 @@ interface ShotCardProps {
   onUpload: (id: string, file: File) => void;
   onExpand: (id: string) => void;
   onDuplicate: (id: string) => void;
+  onUpscale?: (id: string) => void;
   onCoverageFromImage?: (id: string) => void;
   onRestoreFromHistory?: (shotId: string, entry: ImageHistoryEntry) => void;
+  onChatEdit?: (shotId: string, prompt: string) => void;
   isCoverageGenerating?: boolean;
 }
 
@@ -37,14 +53,28 @@ export const ShotCard: React.FC<ShotCardProps> = ({
   onUpload,
   onExpand,
   onDuplicate,
+  onUpscale,
   onCoverageFromImage,
   onRestoreFromHistory,
-  isCoverageGenerating
+  onChatEdit,
+  isCoverageGenerating,
+  aspectRatio,
+  onAspectRatioChange
 }) => {
   const [editPrompt, setEditPrompt] = useState('');
+  const [chatPrompt, setChatPrompt] = useState('');
+  const [showChat, setShowChat] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const chatScrollRef = useRef<HTMLDivElement>(null);
+
+  // Auto-scroll chat to bottom when new messages arrive
+  useEffect(() => {
+    if (chatScrollRef.current && showChat) {
+      chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
+    }
+  }, [shot.chatHistory, showChat]);
 
   useEffect(() => {
     let timer: any;
@@ -122,8 +152,26 @@ export const ShotCard: React.FC<ShotCardProps> = ({
   return (
     <div className="group bg-neutral-900 border border-neutral-800 rounded-lg overflow-hidden flex flex-col h-full hover:border-neutral-600 transition-colors shadow-lg">
 
-      {/* 1. VISUAL AREA */}
-      <div className="relative aspect-video bg-black w-full overflow-hidden">
+      {/* 1. VISUAL AREA — dynamic aspect ratio */}
+      <div className="relative bg-black w-full overflow-hidden" style={{ aspectRatio: getAspectRatioValue(aspectRatio || '16:9') }}>
+
+        {/* Aspect Ratio Selector — bottom-left of image window */}
+        {onAspectRatioChange && (
+          <div className="absolute bottom-2 left-2 z-20">
+            <select
+              value={aspectRatio || '16:9'}
+              onChange={(e) => { e.stopPropagation(); onAspectRatioChange(e.target.value); }}
+              onClick={(e) => e.stopPropagation()}
+              className="bg-neutral-900/80 backdrop-blur text-[10px] text-neutral-300 border border-neutral-700 rounded px-1.5 py-0.5 outline-none hover:border-neutral-500 hover:text-white transition-colors cursor-pointer appearance-none pr-4"
+              title="Aspect Ratio — changes the frame shape"
+              style={{ backgroundImage: 'none' }}
+            >
+              {ASPECT_RATIOS.map(ar => (
+                <option key={ar.value} value={ar.value}>{ar.value}</option>
+              ))}
+            </select>
+          </div>
+        )}
         {shot.imageUrl ? (
           <img
             src={shot.imageUrl}
@@ -174,19 +222,33 @@ export const ShotCard: React.FC<ShotCardProps> = ({
             </Button>
           </div>
 
-          {/* Coverage Button - Only shows when image exists */}
-          {shot.imageUrl && onCoverageFromImage && (
-            <div className="w-full max-w-xs mt-1">
-              <Button
-                size="sm"
-                variant="secondary"
-                onClick={() => onCoverageFromImage(shot.id)}
-                isLoading={isCoverageGenerating}
-                className="w-full"
-                title="Generate 8 coverage shots using this image as reference"
-              >
-                <Focus className="w-3 h-3 mr-2" /> Coverage (8 Shots)
-              </Button>
+          {/* Upscale + Coverage row */}
+          {shot.imageUrl && (
+            <div className="flex gap-2 w-full max-w-xs mt-1">
+              {onUpscale && (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => onUpscale(shot.id)}
+                  isLoading={shot.isUpscaling}
+                  className="flex-1"
+                  title="Upscale image to 4K resolution"
+                >
+                  <ArrowUpFromLine className="w-3 h-3 mr-1" /> 4K
+                </Button>
+              )}
+              {onCoverageFromImage && (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => onCoverageFromImage(shot.id)}
+                  isLoading={isCoverageGenerating}
+                  className="flex-1"
+                  title="Generate 8 coverage shots using this image as reference"
+                >
+                  <Focus className="w-3 h-3 mr-1" /> Coverage
+                </Button>
+              )}
             </div>
           )}
 
@@ -208,9 +270,9 @@ export const ShotCard: React.FC<ShotCardProps> = ({
         </div>
 
         {/* Status Badge */}
-        {(shot.isGenerating || shot.isEditing || shot.isAltering) && (
-          <div className="absolute top-2 right-2 bg-red-600 text-white text-[10px] uppercase font-bold px-2 py-1 rounded-full animate-pulse z-20">
-            {shot.isEditing ? "Editing" : shot.isAltering ? "Altering" : "Rendering"}
+        {(shot.isGenerating || shot.isEditing || shot.isAltering || shot.isUpscaling) && (
+          <div className={`absolute top-2 right-2 text-white text-[10px] uppercase font-bold px-2 py-1 rounded-full animate-pulse z-20 ${shot.isUpscaling ? 'bg-blue-600' : 'bg-red-600'}`}>
+            {shot.isEditing ? "Editing" : shot.isAltering ? "Altering" : shot.isUpscaling ? "Upscaling 4K" : "Rendering"}
           </div>
         )}
 
@@ -454,6 +516,106 @@ export const ShotCard: React.FC<ShotCardProps> = ({
             ))}
           </div>
         </div>
+
+        {/* Refine Chat Toggle + Panel */}
+        {shot.imageUrl && onChatEdit && (
+          <>
+            <button
+              onClick={() => setShowChat(!showChat)}
+              className={`w-full py-2 flex items-center justify-center gap-2 text-xs transition-colors border-t border-neutral-800 ${showChat
+                ? 'bg-purple-900/20 text-purple-400 hover:bg-purple-900/30'
+                : 'bg-neutral-950/50 text-neutral-500 hover:text-white hover:bg-neutral-800'
+                }`}
+            >
+              <MessageCircle className="w-3 h-3" />
+              {showChat ? 'Hide Refine Chat' : `Refine Chat${shot.chatHistory?.length ? ` (${Math.floor((shot.chatHistory.length) / 2)} edits)` : ''}`}
+            </button>
+
+            {showChat && (
+              <div className="border-t border-neutral-800 bg-neutral-950/50">
+                {/* Chat Messages */}
+                <div
+                  ref={chatScrollRef}
+                  className="max-h-48 overflow-y-auto custom-scrollbar p-3 space-y-2"
+                >
+                  {(!shot.chatHistory || shot.chatHistory.length === 0) && (
+                    <div className="text-center py-4 text-neutral-600 text-xs">
+                      <MessageCircle className="w-6 h-6 mx-auto mb-2 opacity-30" />
+                      Type an instruction to iteratively refine this image.<br />
+                      Each edit builds on the previous result.
+                    </div>
+                  )}
+                  {shot.chatHistory?.map(msg => (
+                    <div
+                      key={msg.id}
+                      className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                    >
+                      <div className={`max-w-[85%] rounded-lg px-3 py-1.5 text-xs ${msg.role === 'user'
+                        ? 'bg-purple-900/40 text-purple-200 border border-purple-800/50'
+                        : 'bg-neutral-800 text-green-400 border border-neutral-700'
+                        }`}
+                      >
+                        {msg.role === 'user' ? (
+                          <span>{msg.text}</span>
+                        ) : (
+                          <span className="flex items-center gap-1">✓ Applied</span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                  {shot.isChatEditing && (
+                    <div className="flex justify-start">
+                      <div className="bg-neutral-800 border border-neutral-700 rounded-lg px-3 py-2 text-xs text-neutral-400 flex items-center gap-2">
+                        <div className="w-3 h-3 border-2 border-purple-500 border-t-transparent rounded-full animate-spin"></div>
+                        Refining image...
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Chat Input */}
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    if (chatPrompt.trim() && !shot.isChatEditing) {
+                      onChatEdit(shot.id, chatPrompt);
+                      setChatPrompt('');
+                    }
+                  }}
+                  className="p-2 border-t border-neutral-800 flex gap-2"
+                >
+                  <input
+                    type="text"
+                    value={chatPrompt}
+                    onChange={(e) => setChatPrompt(e.target.value)}
+                    placeholder="e.g. Make the lighting warmer..."
+                    disabled={shot.isChatEditing}
+                    className="flex-1 px-3 py-2 bg-neutral-900 border border-neutral-700 rounded-lg text-xs text-white placeholder-neutral-600 focus:border-purple-600 focus:ring-1 focus:ring-purple-600 outline-none disabled:opacity-50"
+                  />
+                  <button
+                    type="submit"
+                    disabled={!chatPrompt.trim() || shot.isChatEditing}
+                    className="bg-purple-600 hover:bg-purple-500 text-white px-3 py-2 rounded-lg disabled:opacity-50 disabled:hover:bg-purple-600 transition-colors flex items-center"
+                  >
+                    <SendHorizontal className="w-3 h-3" />
+                  </button>
+                </form>
+
+                {/* Clear Chat Button */}
+                {shot.chatHistory && shot.chatHistory.length > 0 && (
+                  <div className="px-3 pb-2 flex justify-end">
+                    <button
+                      onClick={() => onUpdate(shot.id, { chatHistory: [] })}
+                      className="text-[10px] text-neutral-600 hover:text-red-400 transition-colors"
+                    >
+                      Clear history
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+          </>
+        )}
       </div>
     </div>
   );

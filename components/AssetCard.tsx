@@ -1,7 +1,7 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Character, Location } from '../types';
-import { RefreshCw, Sparkles, SendHorizontal, Upload, Trash2, Wand2, ImagePlus, Download, ChevronDown, ChevronUp, User, Clock, Cloud, Palette, Volume2, Lightbulb, Shirt, Brain, Mic, Briefcase, Maximize2, X, RotateCcw, Settings2 } from 'lucide-react';
+import { Character, Location, TurnaroundImage } from '../types';
+import { RefreshCw, Sparkles, SendHorizontal, Upload, Trash2, Wand2, ImagePlus, Download, ChevronDown, ChevronUp, User, Clock, Cloud, Palette, Volume2, Lightbulb, Shirt, Brain, Mic, Briefcase, Maximize2, X, RotateCcw, Settings2, RotateCw, CheckSquare, Square } from 'lucide-react';
 import { Button } from './Button';
 
 interface AssetCardProps {
@@ -14,6 +14,8 @@ interface AssetCardProps {
   onUpdate: (id: string, updates: Partial<Character | Location>) => void;
   onUpdateWithDetails: (id: string) => void;
   onResetToOriginal: (id: string) => void;
+  onGenerateTurnaround?: (id: string) => void;
+  onToggleTurnaroundRef?: (assetId: string, turnaroundId: string) => void;
 }
 
 export const AssetCard: React.FC<AssetCardProps> = ({
@@ -25,7 +27,9 @@ export const AssetCard: React.FC<AssetCardProps> = ({
   onDelete,
   onUpdate,
   onUpdateWithDetails,
-  onResetToOriginal
+  onResetToOriginal,
+  onGenerateTurnaround,
+  onToggleTurnaroundRef
 }) => {
   const [editPrompt, setEditPrompt] = useState('');
   const [deleteConfirm, setDeleteConfirm] = useState(false);
@@ -477,15 +481,15 @@ export const AssetCard: React.FC<AssetCardProps> = ({
             <div className="flex flex-col md:flex-row">
               {/* Image Section */}
               <div className="md:w-1/2 p-6 border-b md:border-b-0 md:border-r border-neutral-800">
-                <div className="relative aspect-square bg-black rounded-lg overflow-hidden group">
+                <div className="relative bg-black rounded-lg overflow-hidden group min-h-[200px] flex items-center justify-center">
                   {item.imageUrl ? (
                     <img
                       src={item.imageUrl}
                       alt={item.name}
-                      className="w-full h-full object-cover"
+                      className="max-w-full max-h-[60vh] object-contain"
                     />
                   ) : (
-                    <div className="w-full h-full flex flex-col items-center justify-center text-neutral-600">
+                    <div className="w-full h-64 flex flex-col items-center justify-center text-neutral-600">
                       <ImagePlus className="w-16 h-16 mb-4 opacity-50" />
                       <span className="text-sm">No image generated</span>
                     </div>
@@ -774,6 +778,79 @@ export const AssetCard: React.FC<AssetCardProps> = ({
                     </div>
                   </div>
                 )}
+
+                {/* Turnaround Section */}
+                <div className="pt-4 border-t border-neutral-800">
+                  <div className="bg-neutral-950 rounded-lg p-4 border border-neutral-800">
+                    <div className="flex items-center justify-between mb-3">
+                      <h4 className="text-xs uppercase tracking-wider text-neutral-500 font-bold flex items-center gap-2">
+                        <RotateCw className="w-4 h-4" /> Reference Angles
+                      </h4>
+                      <span className="text-[10px] text-neutral-600">
+                        {(item.turnaroundImages || []).filter(t => t.isSelected).length} selected as ref
+                      </span>
+                    </div>
+                    <p className="text-xs text-neutral-500 mb-3">
+                      Generate multiple angle views. Selected images will be injected as references when generating storyboard shots.
+                    </p>
+
+                    {/* Generate Turnaround Button */}
+                    {onGenerateTurnaround && item.imageUrl && (
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => onGenerateTurnaround(item.id)}
+                        isLoading={item.isTurnaroundGenerating}
+                        disabled={item.isTurnaroundGenerating || !item.imageUrl}
+                        className="w-full mb-3"
+                      >
+                        <RotateCw className="w-4 h-4 mr-2" />
+                        {item.turnaroundImages?.length ? 'Regenerate Turnaround' : 'Generate Turnaround (4 Angles)'}
+                      </Button>
+                    )}
+
+                    {item.isTurnaroundGenerating && (
+                      <div className="flex items-center justify-center gap-2 text-orange-400 py-3 mb-3 bg-orange-950/20 rounded-lg border border-orange-900/30">
+                        <div className="w-4 h-4 border-2 border-orange-400 border-t-transparent rounded-full animate-spin"></div>
+                        <span className="text-xs font-medium">Generating angles (this takes a minute)...</span>
+                      </div>
+                    )}
+
+                    {/* Turnaround Image Gallery */}
+                    {item.turnaroundImages && item.turnaroundImages.length > 0 && (
+                      <div className="grid grid-cols-2 gap-3">
+                        {item.turnaroundImages.map(tImg => (
+                          <div
+                            key={tImg.id}
+                            className={`relative rounded-lg overflow-hidden border-2 cursor-pointer transition-all group/turnaround ${tImg.isSelected
+                                ? 'border-green-500 shadow-lg shadow-green-900/30'
+                                : 'border-neutral-700 hover:border-neutral-500'
+                              }`}
+                            onClick={() => onToggleTurnaroundRef && onToggleTurnaroundRef(item.id, tImg.id)}
+                          >
+                            <img
+                              src={tImg.imageUrl}
+                              alt={tImg.angle}
+                              className="w-full aspect-[3/4] object-cover"
+                            />
+                            {/* Selection Indicator */}
+                            <div className="absolute top-2 right-2">
+                              {tImg.isSelected ? (
+                                <CheckSquare className="w-5 h-5 text-green-400 drop-shadow-lg" />
+                              ) : (
+                                <Square className="w-5 h-5 text-neutral-400 opacity-0 group-hover/turnaround:opacity-100 transition-opacity drop-shadow-lg" />
+                              )}
+                            </div>
+                            {/* Angle Label */}
+                            <div className="absolute bottom-0 left-0 right-0 bg-black/70 px-2 py-1.5 text-center">
+                              <span className="text-[10px] uppercase tracking-wider text-neutral-300 font-bold">{tImg.angle}</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
 
                 {/* Delete Button */}
                 <div className="pt-4 border-t border-neutral-800">

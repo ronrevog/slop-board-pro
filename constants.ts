@@ -116,6 +116,27 @@ export const ANAMORPHIC_LENS_PROMPTS: Record<string, string> = {
     "180mm Super-Telephoto Anamorphic T2.8. Hyper-compressed geometry. The background is obliterated into a 'curtain' of vertical light streaks ('Waterfall Bokeh'). Extreme subject isolation. The 2x squeeze is uniform. Cool color temperature. The image looks like a vertical slice of a panoramic view."
 };
 
+export const ASPECT_RATIOS = [
+  { value: '16:9', label: '16:9 — Widescreen (HD/4K)', description: '1344×768' },
+  { value: '21:9', label: '21:9 — Ultra Wide (Anamorphic)', description: '1536×672' },
+  { value: '2.39:1', label: '2.39:1 — Cinemascope', description: 'Maps to 21:9' },
+  { value: '3:2', label: '3:2 — Classic Film (35mm)', description: '1248×832' },
+  { value: '4:3', label: '4:3 — Academy Ratio', description: '1184×864' },
+  { value: '1:1', label: '1:1 — Square', description: '1024×1024' },
+  { value: '5:4', label: '5:4 — Large Format', description: '1152×896' },
+  { value: '4:5', label: '4:5 — Portrait (Instagram)', description: '896×1152' },
+  { value: '3:4', label: '3:4 — Portrait Academy', description: '864×1184' },
+  { value: '2:3', label: '2:3 — Portrait Film', description: '832×1248' },
+  { value: '9:16', label: '9:16 — Vertical (Mobile)', description: '768×1344' },
+];
+
+export const RESOLUTIONS = [
+  { value: 'basic', label: 'Basic — Default', description: 'Images: 2K / Video: model-dependent' },
+  { value: '720p', label: '720p — HD', description: '1280×720' },
+  { value: '1080p', label: '1080p — Full HD', description: '1920×1080' },
+  { value: '4k', label: '4K — Ultra HD', description: '3840×2160' },
+];
+
 export const LIGHTING_STYLES = [
   "Chiaroscuro (High Contrast)",
   "Rembrandt (Triangle highlight)",
@@ -134,5 +155,6 @@ export const DEFAULT_PROJECT_SETTINGS = {
   lens: LENSES[3], // Panavision C-Series 50mm T2.3 (Standard)
   lighting: "Natural / Practical",
   aspectRatio: '2.39:1' as const,
+  resolution: 'basic' as const,
   colorGrade: "Teal and Orange",
 };

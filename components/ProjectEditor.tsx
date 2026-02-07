@@ -1,14 +1,14 @@
 
 import React, { useState, useEffect } from 'react';
-import { analyzeScript, analyzeScreenplayPDF, extractTextFromPDF, generateShotImage, editImage, generateAssetImage, alterShotImage, generateShotVideo, extendShotVideo, updateAssetWithDetails, generateCoverageShots } from '../services/geminiService';
-import { Project, Shot, CinematicSettings, Character, Location, VideoSegment, Scene, ImageHistoryEntry, VideoProviderSettings, DEFAULT_VIDEO_SETTINGS } from '../types';
-import { CINEMATOGRAPHERS, FILM_STOCKS, LENSES, LIGHTING_STYLES, ANAMORPHIC_LENS_PROMPTS } from '../constants';
+import { analyzeScript, analyzeScreenplayPDF, extractTextFromPDF, generateShotImage, editImage, generateAssetImage, alterShotImage, generateShotVideo, extendShotVideo, updateAssetWithDetails, generateCoverageShots, upscaleImage, generateCharacterTurnaround, generateLocationTurnaround, chatEditImage } from '../services/geminiService';
+import { Project, Shot, CinematicSettings, Character, Location, VideoSegment, Scene, ImageHistoryEntry, VideoProviderSettings, DEFAULT_VIDEO_SETTINGS, TurnaroundImage } from '../types';
+import { CINEMATOGRAPHERS, FILM_STOCKS, LENSES, LIGHTING_STYLES, ASPECT_RATIOS, RESOLUTIONS, ANAMORPHIC_LENS_PROMPTS } from '../constants';
 import { ShotCard } from './ShotCard';
 import { AssetCard } from './AssetCard';
 import { Button } from './Button';
 import { ShotDetailModal } from './ShotDetailModal';
 import { VideoShotCard, WanGenerationSettings } from './VideoShotCard';
-import { generateWanVideo, validateFalApiKey } from '../services/falService';
+import { generateWanVideo, generateAuroraVideo, validateFalApiKey, AuroraGenerationSettings } from '../services/falService';
 import { Clapperboard, Settings, Users, MapPin, Film, ChevronRight, LayoutGrid, Plus, ChevronLeft, Home, Video, Play, Loader2, Download, AlertCircle, ImageIcon, MonitorPlay, Layers, Trash2, Edit3, ChevronDown, ChevronUp, Focus, FileText, Upload, CheckSquare, Square } from 'lucide-react';
 
 interface ProjectEditorProps {
@@ -46,6 +46,12 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ initialProject, on
   const [falKeyValidating, setFalKeyValidating] = useState(false);
   const [falKeyStatus, setFalKeyStatus] = useState<'idle' | 'valid' | 'invalid'>('idle');
   const [falKeyError, setFalKeyError] = useState<string | null>(null);
+
+  // Google API Key State
+  const [googleApiKey, setGoogleApiKey] = useState<string>(() => localStorage.getItem('gemini_api_key') || '');
+  const [googleKeyStatus, setGoogleKeyStatus] = useState<'idle' | 'saved'>(() =>
+    localStorage.getItem('gemini_api_key') ? 'saved' : 'idle'
+  );
 
   // PDF Upload State
   const [isUploadingPDF, setIsUploadingPDF] = useState(false);
@@ -588,6 +594,32 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ initialProject, on
     }
   };
 
+  const handleUpscaleShot = async (shotId: string) => {
+    if (!activeSceneId) return;
+    updateSceneShots(activeSceneId, shots =>
+      shots.map(s => s.id === shotId ? { ...s, isUpscaling: true } : s)
+    );
+
+    try {
+      const shot = currentShots.find(s => s.id === shotId);
+      if (!shot || !shot.imageUrl) return;
+
+      const imageUrl = await upscaleImage(shot.imageUrl, project.settings.aspectRatio);
+
+      // Save current image to history before replacing
+      const updatedHistory = addToImageHistory(shot, 'edit');
+
+      updateSceneShots(activeSceneId, shots =>
+        shots.map(s => s.id === shotId ? { ...s, isUpscaling: false, imageUrl, imageHistory: updatedHistory } : s)
+      );
+    } catch (e) {
+      console.error("Upscale failed:", e);
+      updateSceneShots(activeSceneId, shots =>
+        shots.map(s => s.id === shotId ? { ...s, isUpscaling: false } : s)
+      );
+    }
+  };
+
   const handleEditShotImage = async (shotId: string, prompt: string) => {
     if (!activeSceneId) return;
     updateSceneShots(activeSceneId, shots =>
@@ -812,6 +844,55 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ initialProject, on
     for (const shot of currentShots) {
       if (!shot.imageUrl) await handleGenerateShot(shot.id);
     }
+  };
+
+  // --- Asset Turnaround Handlers ---
+  const handleGenerateAssetTurnaround = async (id: string, type: 'Character' | 'Location') => {
+    const listKey = type === 'Character' ? 'characters' : 'locations';
+    const item = (project[listKey] as any[]).find((i: any) => i.id === id);
+    if (!item || !item.imageUrl) return;
+
+    setProject(prev => ({
+      ...prev,
+      [listKey]: prev[listKey].map((i: any) => i.id === id ? { ...i, isTurnaroundGenerating: true } : i)
+    }));
+
+    try {
+      const results = type === 'Character'
+        ? await generateCharacterTurnaround(item as Character, project.settings)
+        : await generateLocationTurnaround(item as Location, project.settings);
+
+      const turnaroundImages: TurnaroundImage[] = results.map(r => ({
+        id: crypto.randomUUID(),
+        angle: r.angle,
+        imageUrl: r.imageUrl,
+        isSelected: true // Selected by default
+      }));
+
+      setProject(prev => ({
+        ...prev,
+        [listKey]: prev[listKey].map((i: any) => i.id === id ? { ...i, isTurnaroundGenerating: false, turnaroundImages } : i)
+      }));
+    } catch (e) {
+      console.error('Turnaround generation failed:', e);
+      setProject(prev => ({
+        ...prev,
+        [listKey]: prev[listKey].map((i: any) => i.id === id ? { ...i, isTurnaroundGenerating: false } : i)
+      }));
+    }
+  };
+
+  const handleToggleTurnaroundRef = (assetId: string, turnaroundId: string, type: 'Character' | 'Location') => {
+    const listKey = type === 'Character' ? 'characters' : 'locations';
+    setProject(prev => ({
+      ...prev,
+      [listKey]: prev[listKey].map((i: any) => i.id === assetId ? {
+        ...i,
+        turnaroundImages: (i.turnaroundImages || []).map((t: TurnaroundImage) =>
+          t.id === turnaroundId ? { ...t, isSelected: !t.isSelected } : t
+        )
+      } : i)
+    }));
   };
 
   // --- Coverage Handler ---
@@ -1071,12 +1152,14 @@ Style: ${project.settings.cinematographer}, shot on ${project.settings.filmStock
         isExtension: false
       };
 
+      const existingSegments = shot.videoSegments || [];
+
       updateSceneShots(activeSceneId, shots =>
         shots.map(s => s.id === shotId ? {
           ...s,
           isVideoGenerating: false,
           videoUrl,
-          videoSegments: [newSegment],
+          videoSegments: [...existingSegments, newSegment],
           videoError: undefined
         } : s)
       );
@@ -1167,8 +1250,68 @@ Style: ${project.settings.cinematographer}, shot on ${project.settings.filmStock
     updateShot(shotId, { imageUrl: imageDataUrl });
   };
 
+  // --- Chat Edit Handler ---
+  const handleChatEdit = async (shotId: string, prompt: string) => {
+    if (!activeSceneId) return;
+    const shot = currentShots.find(s => s.id === shotId);
+    if (!shot || !shot.imageUrl) return;
+
+    // Add user message to chat history immediately
+    const userMessage = { id: crypto.randomUUID(), role: 'user' as const, text: prompt, timestamp: Date.now() };
+    const currentHistory = shot.chatHistory || [];
+
+    updateSceneShots(activeSceneId, shots =>
+      shots.map(s => s.id === shotId ? { ...s, isChatEditing: true, chatHistory: [...currentHistory, userMessage] } : s)
+    );
+
+    try {
+      const newImageUrl = await chatEditImage(shot.imageUrl, currentHistory, prompt, project.settings.aspectRatio);
+
+      // Save current image to history before replacing
+      const updatedImageHistory = addToImageHistory(shot, 'edit');
+
+      // Add assistant message confirming the edit
+      const assistantMessage = { id: crypto.randomUUID(), role: 'assistant' as const, text: 'Applied', imageUrl: newImageUrl, timestamp: Date.now() };
+
+      updateSceneShots(activeSceneId, shots =>
+        shots.map(s => s.id === shotId ? {
+          ...s,
+          isChatEditing: false,
+          imageUrl: newImageUrl,
+          imageHistory: updatedImageHistory,
+          chatHistory: [...currentHistory, userMessage, assistantMessage]
+        } : s)
+      );
+    } catch (e) {
+      console.error('Chat edit failed:', e);
+      // Remove the user message on failure and add error
+      updateSceneShots(activeSceneId, shots =>
+        shots.map(s => s.id === shotId ? { ...s, isChatEditing: false, chatHistory: currentHistory } : s)
+      );
+    }
+  };
+
+  const handleDeleteVideoSegment = (shotId: string, segmentId: string) => {
+    if (!activeSceneId) return;
+    updateSceneShots(activeSceneId, shots =>
+      shots.map(s => {
+        if (s.id !== shotId) return s;
+        const updatedSegments = (s.videoSegments || []).filter(seg => seg.id !== segmentId);
+        // Update videoUrl to the last remaining segment, or clear if none left
+        const newVideoUrl = updatedSegments.length > 0
+          ? updatedSegments[updatedSegments.length - 1].url
+          : undefined;
+        return {
+          ...s,
+          videoSegments: updatedSegments,
+          videoUrl: newVideoUrl
+        };
+      })
+    );
+  };
+
   // --- Wan v2.6 Video Generation ---
-  const handleGenerateWanVideo = async (shotId: string, wanSettings: WanGenerationSettings) => {
+  const handleGenerateWanVideo = async (shotId: string, wanSettings: WanGenerationSettings, sourceVideoUrl?: string) => {
     if (!activeSceneId) return;
     const shot = currentShots.find(s => s.id === shotId);
     if (!shot || !shot.imageUrl) return;
@@ -1202,28 +1345,155 @@ Style: ${project.settings.cinematographer}, shot on ${project.settings.filmStock
         wanAudioUrl: wanSettings.audioUrl
       };
 
-      const videoUrl = await generateWanVideo(shot.imageUrl, promptToUse, settings);
+      // Determine source image: extract last frame from selected segment, or use storyboard image
+      let sourceImage = shot.imageUrl;
+      if (sourceVideoUrl) {
+        try {
+          console.log('Extracting last frame from selected segment for Wan generation...');
+          sourceImage = await extractLastFrameFromVideo(sourceVideoUrl);
+          console.log('Last frame extracted successfully from selected segment');
+        } catch (frameErr) {
+          console.warn('Could not extract last frame from segment, using storyboard image instead:', frameErr);
+        }
+      }
+
+      const videoUrl = await generateWanVideo(sourceImage, promptToUse, settings);
 
       const newSegment: VideoSegment = {
         id: crypto.randomUUID(),
         url: videoUrl,
         timestamp: Date.now(),
-        model: 'quality', // Wan doesn't have fast/quality distinction
+        model: 'quality',
         isExtension: false
       };
+
+      const existingSegments = shot.videoSegments || [];
 
       updateSceneShots(activeSceneId, shots =>
         shots.map(s => s.id === shotId ? {
           ...s,
           isVideoGenerating: false,
           videoUrl,
-          videoSegments: [newSegment],
+          videoSegments: [...existingSegments, newSegment],
           videoError: undefined
         } : s)
       );
     } catch (e: any) {
       console.error('Wan video generation failed:', e);
       const errorMessage = e.message || 'Wan video generation failed';
+      updateSceneShots(activeSceneId, shots =>
+        shots.map(s => s.id === shotId ? { ...s, isVideoGenerating: false, videoError: errorMessage } : s)
+      );
+    }
+  };
+
+  // Helper: Extract last frame from a video as a data URL
+  const extractLastFrameFromVideo = (videoSrc: string): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const video = document.createElement('video');
+      video.crossOrigin = 'anonymous';
+      video.preload = 'auto';
+      video.muted = true;
+
+      video.onloadedmetadata = () => {
+        // Seek to near the end (last 0.1 seconds)
+        video.currentTime = Math.max(0, video.duration - 0.1);
+      };
+
+      video.onseeked = () => {
+        try {
+          const canvas = document.createElement('canvas');
+          canvas.width = video.videoWidth || 1280;
+          canvas.height = video.videoHeight || 720;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) {
+            reject(new Error('Could not get canvas context'));
+            return;
+          }
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+          const dataUrl = canvas.toDataURL('image/png');
+          if (!dataUrl || dataUrl === 'data:,') {
+            reject(new Error('Failed to capture last frame'));
+            return;
+          }
+          resolve(dataUrl);
+        } catch (e) {
+          reject(e);
+        } finally {
+          video.src = '';
+          video.load();
+        }
+      };
+
+      video.onerror = () => {
+        reject(new Error('Failed to load video for frame extraction'));
+      };
+
+      video.src = videoSrc;
+    });
+  };
+
+  // --- Aurora Video Generation ---
+  const handleGenerateAuroraVideo = async (shotId: string, auroraSettings: AuroraGenerationSettings) => {
+    if (!activeSceneId) return;
+    const shot = currentShots.find(s => s.id === shotId);
+    if (!shot || !shot.imageUrl) return;
+
+    const videoSettings = project.videoSettings || DEFAULT_VIDEO_SETTINGS;
+    if (!videoSettings.falApiKey) {
+      console.error('fal.ai API key not configured');
+      updateSceneShots(activeSceneId, shots =>
+        shots.map(s => s.id === shotId ? { ...s, videoError: 'fal.ai API key not configured. Go to Settings tab.' } : s)
+      );
+      return;
+    }
+
+    updateSceneShots(activeSceneId, shots =>
+      shots.map(s => s.id === shotId ? { ...s, isVideoGenerating: true, videoError: undefined } : s)
+    );
+
+    try {
+      // If there's already a rendered video, grab the last frame and use it as the source image
+      let sourceImage = shot.imageUrl;
+      if (shot.videoUrl) {
+        try {
+          console.log('Extracting last frame from existing video for Lip Sync...');
+          sourceImage = await extractLastFrameFromVideo(shot.videoUrl);
+          console.log('Last frame extracted successfully');
+        } catch (frameErr) {
+          console.warn('Could not extract last frame from video, using storyboard image instead:', frameErr);
+          // Fall back to the storyboard image
+        }
+      }
+
+      const videoUrl = await generateAuroraVideo(
+        sourceImage,
+        auroraSettings,
+        videoSettings.falApiKey
+      );
+
+      const newSegment: VideoSegment = {
+        id: crypto.randomUUID(),
+        url: videoUrl,
+        timestamp: Date.now(),
+        model: 'quality',
+        isExtension: false
+      };
+
+      const existingSegments = shot.videoSegments || [];
+
+      updateSceneShots(activeSceneId, shots =>
+        shots.map(s => s.id === shotId ? {
+          ...s,
+          isVideoGenerating: false,
+          videoUrl,
+          videoSegments: [...existingSegments, newSegment],
+          videoError: undefined
+        } : s)
+      );
+    } catch (e: any) {
+      console.error('Aurora video generation failed:', e);
+      const errorMessage = e.message || 'Aurora video generation failed';
       updateSceneShots(activeSceneId, shots =>
         shots.map(s => s.id === shotId ? { ...s, isVideoGenerating: false, videoError: errorMessage } : s)
       );
@@ -1377,6 +1647,21 @@ Style: ${project.settings.cinematographer}, shot on ${project.settings.filmStock
             >
               {LIGHTING_STYLES.map(c => <option key={c} value={c}>{c}</option>)}
             </select>
+          </div>
+          <div className="space-y-3">
+            <label className="text-xs font-bold text-neutral-500 uppercase tracking-widest flex items-center gap-2">
+              <MonitorPlay className="w-3 h-3" /> Resolution
+            </label>
+            <select
+              className="w-full bg-neutral-800 border border-neutral-700 rounded-md p-2 text-sm text-white focus:ring-1 focus:ring-red-500 outline-none"
+              value={project.settings.resolution || 'basic'}
+              onChange={(e) => handleSettingChange('resolution', e.target.value)}
+            >
+              {RESOLUTIONS.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
+            </select>
+            <p className="text-xs text-neutral-600">
+              {RESOLUTIONS.find(r => r.value === (project.settings.resolution || 'basic'))?.description} — Applies to storyboard images &amp; video output
+            </p>
           </div>
         </div>
       </aside>
@@ -1652,6 +1937,8 @@ TIP: Select (highlight) a portion of text and click 'Analyze Scene' to analyze o
                     onUpdate={(id, u) => handleUpdateAsset(id, u, 'Character')}
                     onUpdateWithDetails={(id) => handleUpdateAssetWithDetails(id, 'Character')}
                     onResetToOriginal={(id) => handleResetAssetToOriginal(id, 'Character')}
+                    onGenerateTurnaround={(id) => handleGenerateAssetTurnaround(id, 'Character')}
+                    onToggleTurnaroundRef={(assetId, tId) => handleToggleTurnaroundRef(assetId, tId, 'Character')}
                   />
                 ))}
               </div>
@@ -1680,6 +1967,8 @@ TIP: Select (highlight) a portion of text and click 'Analyze Scene' to analyze o
                     onUpdate={(id, u) => handleUpdateAsset(id, u, 'Location')}
                     onUpdateWithDetails={(id) => handleUpdateAssetWithDetails(id, 'Location')}
                     onResetToOriginal={(id) => handleResetAssetToOriginal(id, 'Location')}
+                    onGenerateTurnaround={(id) => handleGenerateAssetTurnaround(id, 'Location')}
+                    onToggleTurnaroundRef={(assetId, tId) => handleToggleTurnaroundRef(assetId, tId, 'Location')}
                   />
                 ))}
               </div>
@@ -1706,6 +1995,8 @@ TIP: Select (highlight) a portion of text and click 'Analyze Scene' to analyze o
                       allCharacters={project.characters}
                       allLocations={project.locations}
                       allShots={currentShots}
+                      aspectRatio={project.settings.aspectRatio}
+                      onAspectRatioChange={(ratio) => handleSettingChange('aspectRatio', ratio)}
                       onGenerate={handleGenerateShot}
                       onAlter={handleAlterShot}
                       onEditImage={handleEditShotImage}
@@ -1714,8 +2005,10 @@ TIP: Select (highlight) a portion of text and click 'Analyze Scene' to analyze o
                       onUpload={handleUploadShotImage}
                       onExpand={setExpandedShotId}
                       onDuplicate={handleDuplicateShot}
+                      onUpscale={handleUpscaleShot}
                       onCoverageFromImage={handleGenerateCoverageFromImage}
                       onRestoreFromHistory={handleRestoreFromHistory}
+                      onChatEdit={handleChatEdit}
                       isCoverageGenerating={coverageSourceShotId === shot.id}
                     />
                   ))}
@@ -1731,15 +2024,18 @@ TIP: Select (highlight) a portion of text and click 'Analyze Scene' to analyze o
                   <VideoShotCard
                     key={shot.id}
                     shot={shot}
+                    projectTitle={project.title}
                     sceneName={activeScene?.name}
                     videoModelLabel={`Veo ${shot.videoModel === 'quality' ? 'Quality' : 'Fast'} Model`}
                     projectVideoSettings={project.videoSettings}
                     onUpdatePrompt={handleUpdateVideoPrompt}
                     onGenerate={handleGenerateVideo}
                     onGenerateWan={handleGenerateWanVideo}
+                    onGenerateAurora={handleGenerateAuroraVideo}
                     onExtend={handleExtendVideo}
                     onDownload={handleDownloadVideo}
                     onCaptureFrame={handleCaptureFrame}
+                    onDeleteSegment={handleDeleteVideoSegment}
                     synthesizePrompt={synthesizeVideoPrompt}
                   />
                 ))}
@@ -1753,13 +2049,128 @@ TIP: Select (highlight) a portion of text and click 'Analyze Scene' to analyze o
                 <Settings className="w-5 h-5 text-red-600" /> Project Settings
               </h2>
 
+              {/* API Keys Section - Always Visible */}
+              <div className="bg-neutral-900 p-6 rounded-lg border border-neutral-800 shadow-xl space-y-6">
+                <h3 className="text-lg font-serif text-white flex items-center gap-2">
+                  🔑 API Keys
+                </h3>
+
+                {/* fal.ai API Key */}
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-neutral-500 uppercase tracking-widest">
+                    fal.ai API Key <span className="text-neutral-600">(Wan v2.6 + Lip Sync)</span>
+                  </label>
+                  <div className="flex gap-2">
+                    <input
+                      type="password"
+                      className={`flex-1 bg-neutral-800 border rounded-md p-3 text-sm text-white focus:ring-1 focus:ring-red-500 outline-none ${falKeyStatus === 'valid' ? 'border-green-600' : falKeyStatus === 'invalid' ? 'border-red-600' : 'border-neutral-700'
+                        }`}
+                      placeholder="Enter your fal.ai API key..."
+                      value={project.videoSettings?.falApiKey || ''}
+                      onChange={(e) => {
+                        setFalKeyStatus('idle');
+                        setFalKeyError(null);
+                        setProject(p => ({
+                          ...p,
+                          videoSettings: { ...(p.videoSettings || DEFAULT_VIDEO_SETTINGS), falApiKey: e.target.value }
+                        }));
+                      }}
+                    />
+                    <Button
+                      variant={falKeyStatus === 'valid' ? 'secondary' : 'primary'}
+                      onClick={async () => {
+                        const key = project.videoSettings?.falApiKey;
+                        if (!key) return;
+                        setFalKeyValidating(true);
+                        setFalKeyStatus('idle');
+                        setFalKeyError(null);
+                        try {
+                          const result = await validateFalApiKey(key);
+                          if (result.valid) {
+                            setFalKeyStatus('valid');
+                            onSave(project);
+                          } else {
+                            setFalKeyStatus('invalid');
+                            setFalKeyError(result.error || 'Invalid API key');
+                          }
+                        } catch (e: any) {
+                          setFalKeyStatus('invalid');
+                          setFalKeyError(e.message || 'Validation failed');
+                        } finally {
+                          setFalKeyValidating(false);
+                        }
+                      }}
+                      disabled={!project.videoSettings?.falApiKey || falKeyValidating}
+                      isLoading={falKeyValidating}
+                      className="whitespace-nowrap"
+                    >
+                      {falKeyStatus === 'valid' ? '✓ Saved' : 'Validate & Save'}
+                    </Button>
+                  </div>
+                  {falKeyStatus === 'valid' && (
+                    <p className="text-xs text-green-500 flex items-center gap-1">
+                      <CheckSquare className="w-3 h-3" /> API key validated and saved
+                    </p>
+                  )}
+                  {falKeyStatus === 'invalid' && falKeyError && (
+                    <p className="text-xs text-red-500 flex items-center gap-1">
+                      <AlertCircle className="w-3 h-3" /> {falKeyError}
+                    </p>
+                  )}
+                  <p className="text-xs text-neutral-600">
+                    Shared across all fal.ai models. Get yours from <a href="https://fal.ai/dashboard/keys" target="_blank" rel="noopener noreferrer" className="text-red-500 hover:underline">fal.ai/dashboard/keys</a>
+                  </p>
+                </div>
+
+                {/* Google / Gemini API Key */}
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-neutral-500 uppercase tracking-widest">
+                    Google AI Studio Key <span className="text-neutral-600">(Gemini + Veo)</span>
+                  </label>
+                  <div className="flex gap-2">
+                    <input
+                      type="password"
+                      className={`flex-1 bg-neutral-800 border rounded-md p-3 text-sm text-white focus:ring-1 focus:ring-red-500 outline-none ${googleKeyStatus === 'saved' ? 'border-green-600' : 'border-neutral-700'
+                        }`}
+                      placeholder="Enter your Google AI Studio API key..."
+                      value={googleApiKey}
+                      onChange={(e) => {
+                        setGoogleApiKey(e.target.value);
+                        setGoogleKeyStatus('idle');
+                      }}
+                    />
+                    <Button
+                      variant={googleKeyStatus === 'saved' ? 'secondary' : 'primary'}
+                      onClick={() => {
+                        if (!googleApiKey.trim()) return;
+                        localStorage.setItem('gemini_api_key', googleApiKey.trim());
+                        setGoogleKeyStatus('saved');
+                      }}
+                      disabled={!googleApiKey.trim()}
+                      className="whitespace-nowrap"
+                    >
+                      {googleKeyStatus === 'saved' ? '✓ Saved' : 'Save Key'}
+                    </Button>
+                  </div>
+                  {googleKeyStatus === 'saved' && (
+                    <p className="text-xs text-green-500 flex items-center gap-1">
+                      <CheckSquare className="w-3 h-3" /> Google API key saved to browser
+                    </p>
+                  )}
+                  <p className="text-xs text-neutral-600">
+                    Powers Gemini image generation + Veo video. Get yours from <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer" className="text-red-500 hover:underline">aistudio.google.com/apikey</a>
+                  </p>
+                </div>
+              </div>
+
               {/* Video Provider Selection */}
               <div className="bg-neutral-900 p-6 rounded-lg border border-neutral-800 shadow-xl">
                 <h3 className="text-lg font-serif text-white flex items-center gap-2 mb-4">
                   <Video className="w-5 h-5 text-red-600" />
-                  Video Generation Provider
+                  Default Video Provider
                 </h3>
-                <div className="grid grid-cols-2 gap-4">
+                <p className="text-xs text-neutral-500 mb-4">Sets the default provider for new shots. You can override per-shot in the Video tab.</p>
+                <div className="grid grid-cols-3 gap-4">
                   <button
                     onClick={() => setProject(p => ({ ...p, videoSettings: { ...(p.videoSettings || DEFAULT_VIDEO_SETTINGS), provider: 'veo' } }))}
                     className={`p-4 rounded-lg border-2 transition-all ${(project.videoSettings?.provider || 'veo') === 'veo'
@@ -1767,18 +2178,28 @@ TIP: Select (highlight) a portion of text and click 'Analyze Scene' to analyze o
                       : 'border-neutral-700 bg-neutral-800/50 text-neutral-400 hover:border-neutral-500'
                       }`}
                   >
-                    <div className="font-bold text-lg mb-1">Veo (Google)</div>
-                    <div className="text-xs text-neutral-500">Uses AI Studio API key</div>
+                    <div className="font-bold text-sm mb-1">Veo (Google)</div>
+                    <div className="text-xs text-neutral-500">AI Studio API key</div>
                   </button>
                   <button
                     onClick={() => setProject(p => ({ ...p, videoSettings: { ...(p.videoSettings || DEFAULT_VIDEO_SETTINGS), provider: 'fal-wan' } }))}
                     className={`p-4 rounded-lg border-2 transition-all ${project.videoSettings?.provider === 'fal-wan'
-                      ? 'border-red-600 bg-red-900/20 text-white'
+                      ? 'border-orange-600 bg-orange-900/20 text-white'
                       : 'border-neutral-700 bg-neutral-800/50 text-neutral-400 hover:border-neutral-500'
                       }`}
                   >
-                    <div className="font-bold text-lg mb-1">Wan v2.6 (fal.ai)</div>
+                    <div className="font-bold text-sm mb-1">Wan v2.6 (fal.ai)</div>
                     <div className="text-xs text-neutral-500">Image-to-Video, 5-15s</div>
+                  </button>
+                  <button
+                    onClick={() => setProject(p => ({ ...p, videoSettings: { ...(p.videoSettings || DEFAULT_VIDEO_SETTINGS), provider: 'fal-aurora' } }))}
+                    className={`p-4 rounded-lg border-2 transition-all ${project.videoSettings?.provider === 'fal-aurora'
+                      ? 'border-purple-600 bg-purple-900/20 text-white'
+                      : 'border-neutral-700 bg-neutral-800/50 text-neutral-400 hover:border-neutral-500'
+                      }`}
+                  >
+                    <div className="font-bold text-sm mb-1">Lip Sync (fal.ai)</div>
+                    <div className="text-xs text-neutral-500">Audio-driven video</div>
                   </button>
                 </div>
               </div>
@@ -1787,78 +2208,9 @@ TIP: Select (highlight) a portion of text and click 'Analyze Scene' to analyze o
               {project.videoSettings?.provider === 'fal-wan' && (
                 <div className="bg-neutral-900 p-6 rounded-lg border border-neutral-800 shadow-xl space-y-6">
                   <h3 className="text-lg font-serif text-white flex items-center gap-2">
-                    <Settings className="w-5 h-5 text-red-600" />
-                    Wan v2.6 Settings
+                    <Settings className="w-5 h-5 text-orange-500" />
+                    Wan v2.6 Default Settings
                   </h3>
-
-                  {/* API Key */}
-                  <div className="space-y-2">
-                    <label className="text-xs font-bold text-neutral-500 uppercase tracking-widest">
-                      fal.ai API Key <span className="text-red-500">*</span>
-                    </label>
-                    <div className="flex gap-2">
-                      <input
-                        type="password"
-                        className={`flex-1 bg-neutral-800 border rounded-md p-3 text-sm text-white focus:ring-1 focus:ring-red-500 outline-none ${falKeyStatus === 'valid' ? 'border-green-600' : falKeyStatus === 'invalid' ? 'border-red-600' : 'border-neutral-700'
-                          }`}
-                        placeholder="Enter your fal.ai API key..."
-                        value={project.videoSettings?.falApiKey || ''}
-                        onChange={(e) => {
-                          setFalKeyStatus('idle');
-                          setFalKeyError(null);
-                          setProject(p => ({
-                            ...p,
-                            videoSettings: { ...(p.videoSettings || DEFAULT_VIDEO_SETTINGS), falApiKey: e.target.value }
-                          }));
-                        }}
-                      />
-                      <Button
-                        variant={falKeyStatus === 'valid' ? 'secondary' : 'primary'}
-                        onClick={async () => {
-                          const key = project.videoSettings?.falApiKey;
-                          if (!key) return;
-                          setFalKeyValidating(true);
-                          setFalKeyStatus('idle');
-                          setFalKeyError(null);
-                          try {
-                            const result = await validateFalApiKey(key);
-                            if (result.valid) {
-                              setFalKeyStatus('valid');
-                              // Trigger save
-                              onSave(project);
-                            } else {
-                              setFalKeyStatus('invalid');
-                              setFalKeyError(result.error || 'Invalid API key');
-                            }
-                          } catch (e: any) {
-                            setFalKeyStatus('invalid');
-                            setFalKeyError(e.message || 'Validation failed');
-                          } finally {
-                            setFalKeyValidating(false);
-                          }
-                        }}
-                        disabled={!project.videoSettings?.falApiKey || falKeyValidating}
-                        isLoading={falKeyValidating}
-                        className="whitespace-nowrap"
-                      >
-                        {falKeyStatus === 'valid' ? '✓ Saved' : 'Validate & Save'}
-                      </Button>
-                    </div>
-                    {/* Status Messages */}
-                    {falKeyStatus === 'valid' && (
-                      <p className="text-xs text-green-500 flex items-center gap-1">
-                        <CheckSquare className="w-3 h-3" /> API key validated and saved successfully
-                      </p>
-                    )}
-                    {falKeyStatus === 'invalid' && falKeyError && (
-                      <p className="text-xs text-red-500 flex items-center gap-1">
-                        <AlertCircle className="w-3 h-3" /> {falKeyError}
-                      </p>
-                    )}
-                    <p className="text-xs text-neutral-600">
-                      Get your API key from <a href="https://fal.ai/dashboard/keys" target="_blank" rel="noopener noreferrer" className="text-red-500 hover:underline">fal.ai/dashboard/keys</a>
-                    </p>
-                  </div>
 
                   <div className="grid grid-cols-2 gap-4">
                     {/* Resolution */}
@@ -1991,6 +2343,105 @@ TIP: Select (highlight) a portion of text and click 'Analyze Scene' to analyze o
                       }))}
                     />
                     <p className="text-xs text-neutral-600">Background music URL (WAV/MP3, max 15MB)</p>
+                  </div>
+                </div>
+              )}
+
+              {/* fal.ai Aurora Settings */}
+              {project.videoSettings?.provider === 'fal-aurora' && (
+                <div className="bg-neutral-900 p-6 rounded-lg border border-purple-900/30 shadow-xl space-y-6">
+                  <h3 className="text-lg font-serif text-white flex items-center gap-2">
+                    <Settings className="w-5 h-5 text-purple-500" />
+                    Lip Sync Default Settings
+                  </h3>
+                  <p className="text-xs text-neutral-500">
+                    Generates audio-driven video from an image + audio file. Ideal for lip-sync talking heads and audio-reactive motion.
+                  </p>
+
+                  {/* Default Resolution */}
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold text-neutral-500 uppercase tracking-widest">Default Resolution</label>
+                    <select
+                      className="w-full bg-neutral-800 border border-neutral-700 rounded-md p-2 text-sm text-white focus:ring-1 focus:ring-purple-500 outline-none"
+                      value={project.videoSettings?.auroraResolution || '720p'}
+                      onChange={(e) => setProject(p => ({
+                        ...p,
+                        videoSettings: { ...(p.videoSettings || DEFAULT_VIDEO_SETTINGS), auroraResolution: e.target.value as '480p' | '720p' }
+                      }))}
+                    >
+                      <option value="480p">480p</option>
+                      <option value="720p">720p</option>
+                    </select>
+                  </div>
+
+                  {/* Default Audio URL */}
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold text-neutral-500 uppercase tracking-widest">Default Audio URL</label>
+                    <input
+                      type="url"
+                      className="w-full bg-neutral-800 border border-neutral-700 rounded-md p-3 text-sm text-white focus:ring-1 focus:ring-purple-500 outline-none"
+                      placeholder="https://example.com/audio.wav"
+                      value={project.videoSettings?.auroraAudioUrl || ''}
+                      onChange={(e) => setProject(p => ({
+                        ...p,
+                        videoSettings: { ...(p.videoSettings || DEFAULT_VIDEO_SETTINGS), auroraAudioUrl: e.target.value }
+                      }))}
+                    />
+                    <p className="text-xs text-neutral-600">Default audio URL pre-filled per shot. WAV or MP3 (required for generation).</p>
+                  </div>
+
+                  {/* Default Guidance Scales */}
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold text-neutral-500 uppercase tracking-widest">
+                        Prompt Guidance ({project.videoSettings?.auroraGuidanceScale ?? 1})
+                      </label>
+                      <input
+                        type="range"
+                        min="0"
+                        max="5"
+                        step="0.1"
+                        value={project.videoSettings?.auroraGuidanceScale ?? 1}
+                        onChange={(e) => setProject(p => ({
+                          ...p,
+                          videoSettings: { ...(p.videoSettings || DEFAULT_VIDEO_SETTINGS), auroraGuidanceScale: parseFloat(e.target.value) }
+                        }))}
+                        className="w-full accent-purple-500"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold text-neutral-500 uppercase tracking-widest">
+                        Audio Guidance ({project.videoSettings?.auroraAudioGuidanceScale ?? 2})
+                      </label>
+                      <input
+                        type="range"
+                        min="0"
+                        max="5"
+                        step="0.1"
+                        value={project.videoSettings?.auroraAudioGuidanceScale ?? 2}
+                        onChange={(e) => setProject(p => ({
+                          ...p,
+                          videoSettings: { ...(p.videoSettings || DEFAULT_VIDEO_SETTINGS), auroraAudioGuidanceScale: parseFloat(e.target.value) }
+                        }))}
+                        className="w-full accent-purple-500"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Default Prompt */}
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold text-neutral-500 uppercase tracking-widest">Default Prompt (Optional)</label>
+                    <textarea
+                      className="w-full bg-neutral-800 border border-neutral-700 rounded-md p-3 text-sm text-white focus:ring-1 focus:ring-purple-500 outline-none resize-none"
+                      placeholder="e.g., 4K studio interview, medium close-up..."
+                      rows={2}
+                      value={project.videoSettings?.auroraPrompt || ''}
+                      onChange={(e) => setProject(p => ({
+                        ...p,
+                        videoSettings: { ...(p.videoSettings || DEFAULT_VIDEO_SETTINGS), auroraPrompt: e.target.value }
+                      }))}
+                    />
+                    <p className="text-xs text-neutral-600">If set, overrides the Director's Prompt by default. Can be changed per-shot.</p>
                   </div>
                 </div>
               )}
