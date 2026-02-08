@@ -9,6 +9,7 @@ import { Button } from './Button';
 import { ShotDetailModal } from './ShotDetailModal';
 import { VideoShotCard, WanGenerationSettings } from './VideoShotCard';
 import { generateWanVideo, generateAuroraVideo, validateFalApiKey, AuroraGenerationSettings } from '../services/falService';
+import { MotionControl } from './MotionControl';
 import { Clapperboard, Settings, Users, MapPin, Film, ChevronRight, LayoutGrid, Plus, ChevronLeft, Home, Video, Play, Loader2, Download, AlertCircle, ImageIcon, MonitorPlay, Layers, Trash2, Edit3, ChevronDown, ChevronUp, Focus, FileText, Upload, CheckSquare, Square } from 'lucide-react';
 
 interface ProjectEditorProps {
@@ -34,7 +35,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ initialProject, on
     return initialProject;
   });
   const [activeSceneId, setActiveSceneId] = useState<string>(() => project.scenes?.[0]?.id || '');
-  const [activeTab, setActiveTab] = useState<'script' | 'characters' | 'locations' | 'board' | 'video' | 'settings'>('board');
+  const [activeTab, setActiveTab] = useState<'script' | 'characters' | 'locations' | 'board' | 'video' | 'motion' | 'settings'>('board');
   const [isBreakingDown, setIsBreakingDown] = useState(false);
   const [isGeneratingCoverage, setIsGeneratingCoverage] = useState(false);
   const [coverageSourceShotId, setCoverageSourceShotId] = useState<string | null>(null);
@@ -1681,6 +1682,10 @@ Style: ${project.settings.cinematographer}, shot on ${project.settings.filmStock
               <Video className="w-3 h-3" /> Video
             </button>
             <ChevronRight className="w-4 h-4 text-neutral-600" />
+            <button onClick={() => setActiveTab('motion')} className={`px-4 py-2 text-sm font-medium rounded-md transition-colors flex items-center gap-2 ${activeTab === 'motion' ? 'bg-purple-900/20 text-purple-400 border border-purple-900/30' : 'text-neutral-400 hover:text-white'}`}>
+              <Clapperboard className="w-3 h-3" /> Motion
+            </button>
+            <ChevronRight className="w-4 h-4 text-neutral-600" />
             <button onClick={() => setActiveTab('settings')} className={`px-4 py-2 text-sm font-medium rounded-md transition-colors flex items-center gap-2 ${activeTab === 'settings' ? 'bg-neutral-800 text-white' : 'text-neutral-400 hover:text-white'}`}>
               <Settings className="w-3 h-3" /> Settings
             </button>
@@ -2041,6 +2046,10 @@ TIP: Select (highlight) a portion of text and click 'Analyze Scene' to analyze o
                 ))}
               </div>
             </div>
+          )}
+
+          {activeTab === 'motion' && (
+            <MotionControl project={project} />
           )}
 
           {activeTab === 'settings' && (

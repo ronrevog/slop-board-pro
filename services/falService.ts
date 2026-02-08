@@ -191,6 +191,129 @@ export const generateWanVideo = async (
     }
 };
 
+// ============================================================
+// Kling Video O3 Pro - Video-to-Video with Reference
+// ============================================================
+
+export interface KlingElementInput {
+    frontal_image_url?: string;
+    reference_image_urls?: string[];
+}
+
+export interface KlingV2VReferenceInput {
+    prompt: string;
+    video_url: string;
+    image_urls?: string[];
+    keep_audio?: boolean;
+    elements?: KlingElementInput[];
+    shot_type?: 'customize';
+    aspect_ratio?: 'auto' | '16:9' | '9:16' | '1:1';
+    duration?: string; // '3'-'15'
+}
+
+export interface KlingV2VReferenceOutput {
+    video: {
+        url: string;
+        content_type?: string;
+        file_name?: string;
+        file_size?: number;
+    };
+}
+
+/**
+ * Generate a video using Kling Video O3 Pro Video-to-Video with Reference via fal.ai SDK
+ * Supports reference images for style/appearance and elements (characters/objects).
+ * @param videoUrl - URL of the source/reference video (must be hosted, not base64)
+ * @param prompt - Text prompt for video generation. Reference video as @Video1, images as @Image1, elements as @Element1
+ * @param options - Additional generation options
+ * @param falApiKey - The fal.ai API key
+ * @param onProgress - Optional callback for progress updates
+ * @returns Base64 data URL of the generated video
+ */
+export const generateKlingV2VReference = async (
+    videoUrl: string,
+    prompt: string,
+    options: {
+        imageUrls?: string[];
+        elements?: KlingElementInput[];
+        aspectRatio?: 'auto' | '16:9' | '9:16' | '1:1';
+        duration?: string;
+        keepAudio?: boolean;
+    },
+    falApiKey: string,
+    onProgress?: (status: string, position?: number) => void
+): Promise<string> => {
+    if (!falApiKey) {
+        throw new Error('fal.ai API key is required. Please add it in project settings.');
+    }
+
+    const cleanKey = falApiKey.trim().replace(/^Key\s+/i, '');
+    fal.config({ credentials: cleanKey });
+
+    const input: KlingV2VReferenceInput = {
+        prompt,
+        video_url: videoUrl,
+        image_urls: options.imageUrls?.length ? options.imageUrls : undefined,
+        elements: options.elements?.length ? options.elements : undefined,
+        aspect_ratio: options.aspectRatio || 'auto',
+        duration: options.duration || '5',
+        keep_audio: options.keepAudio ?? true,
+        shot_type: 'customize',
+    };
+
+    console.log('Submitting to Kling O3 Pro V2V Reference:', { ...input, video_url: input.video_url.substring(0, 80) + '...' });
+    onProgress?.('Submitting to Kling V2V...');
+
+    try {
+        const result = await fal.subscribe('fal-ai/kling-video/o3/pro/video-to-video/reference', {
+            input,
+            logs: true,
+            onQueueUpdate: (update) => {
+                if (update.status === 'IN_QUEUE') {
+                    const position = (update as any).queue_position;
+                    onProgress?.('In queue...', position);
+                    console.log('Kling V2V queue position:', position);
+                } else if (update.status === 'IN_PROGRESS') {
+                    onProgress?.('Generating video with Kling...');
+                    console.log('Kling V2V generation in progress...');
+                    if (update.logs) {
+                        update.logs.forEach(log => console.log('Kling log:', log.message));
+                    }
+                }
+            },
+        });
+
+        console.log('Kling V2V result:', result);
+        const videoData = result.data as KlingV2VReferenceOutput;
+
+        if (!videoData?.video?.url) {
+            throw new Error('No video URL in Kling V2V result');
+        }
+
+        console.log('Kling V2V video generated:', videoData.video.url);
+        onProgress?.('Downloading video...');
+
+        try {
+            const videoResponse = await fetch(videoData.video.url);
+            if (!videoResponse.ok) throw new Error('Failed to download Kling video');
+            const blob = await videoResponse.blob();
+            return await blobToBase64(blob);
+        } catch (fetchError) {
+            console.warn('Could not fetch Kling video blob, returning URL:', fetchError);
+            return videoData.video.url;
+        }
+    } catch (error: any) {
+        console.error('Kling V2V SDK error:', error);
+        if (error.status === 401 || error.message?.includes('401')) {
+            throw new Error('fal.ai API key is invalid. Please check your key in Settings.');
+        }
+        if (error.status === 403 || error.message?.includes('403')) {
+            throw new Error('fal.ai API key does not have permission for the Kling model.');
+        }
+        throw new Error(error.message || 'Kling V2V video generation failed');
+    }
+};
+
 /**
  * Cancel is not directly supported by fal SDK subscribe
  * The generation will complete but result won't be used
