@@ -1082,6 +1082,24 @@ Maintain visual continuity: same color grade, lighting, environment details, and
         });
       }
 
+      // Add user-uploaded reference photos for this shot
+      if (shot.referenceImages && shot.referenceImages.length > 0) {
+        shot.referenceImages.forEach((refImg, idx) => {
+          const base64Data = refImg.startsWith('data:') ? refImg.split(',')[1] : refImg;
+          const mimeMatch = refImg.match(/data:(image\/[^;]+);/);
+          const mimeType = mimeMatch ? mimeMatch[1] : 'image/png';
+          parts.push({
+            inlineData: {
+              mimeType: mimeType,
+              data: base64Data,
+            }
+          });
+          parts.push({
+            text: `USER_REFERENCE_PHOTO_${idx + 1}: This is a reference photo provided by the director. Use it as strong visual guidance for composition, style, mood, lighting, or subject matter. Closely match the visual qualities shown in this reference.`
+          });
+        });
+      }
+
       // Add main prompt for normal generation
       parts.push({ text: mainPromptText });
     }
@@ -1246,6 +1264,24 @@ export const alterShotImage = async (
       text: `REFERENCE_ADJACENT_SHOT_${idx + 1}: Nearby Shot #${adjShot.number} — maintain visual continuity.`
     });
   });
+
+  // 6. Inject user-uploaded reference photos for this shot
+  if (shot.referenceImages && shot.referenceImages.length > 0) {
+    shot.referenceImages.forEach((refImg, idx) => {
+      const base64Data = refImg.startsWith('data:') ? refImg.split(',')[1] : refImg;
+      const mimeMatch = refImg.match(/data:(image\/[^;]+);/);
+      const mimeType = mimeMatch ? mimeMatch[1] : 'image/png';
+      parts.push({
+        inlineData: {
+          mimeType: mimeType,
+          data: base64Data,
+        }
+      });
+      parts.push({
+        text: `USER_REFERENCE_PHOTO_${idx + 1}: Director-provided reference photo. Use as strong visual guidance for composition, style, mood, lighting, or subject matter.`
+      });
+    });
+  }
 
   // Check if using Panavision C-Series Anamorphic lens
   const isAnamorphicLens = settings.lens.startsWith("Panavision C-Series");

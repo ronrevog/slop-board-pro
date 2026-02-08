@@ -1,7 +1,7 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { Shot, Character, Location, ImageHistoryEntry, ChatMessage } from '../types';
-import { Camera, RefreshCw, SendHorizontal, MessageSquare, MapPin, Users, Edit3, Trash2, Upload, Download, Maximize2, Wand2, Plus, X, Link, Copy, Focus, History, RotateCcw, MonitorPlay, ArrowUpFromLine, MessageCircle } from 'lucide-react';
+import { Camera, RefreshCw, SendHorizontal, MessageSquare, MapPin, Users, Edit3, Trash2, Upload, Download, Maximize2, Wand2, Plus, X, Link, Copy, Focus, History, RotateCcw, MonitorPlay, ArrowUpFromLine, MessageCircle, ImageIcon } from 'lucide-react';
 import { Button } from './Button';
 import { ASPECT_RATIOS } from '../constants';
 import { AspectRatio } from '../types';
@@ -469,6 +469,63 @@ export const ShotCard: React.FC<ShotCardProps> = ({
                 </button>
               ))}
               {allCharacters.length === 0 && <span className="text-[10px] text-neutral-600 italic">No characters available</span>}
+            </div>
+          </div>
+
+          {/* Reference Images */}
+          <div className="flex items-start gap-2">
+            <ImageIcon className="w-3 h-3 text-neutral-500 mt-1.5" />
+            <div className="flex-1">
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-[10px] text-neutral-500 uppercase tracking-widest font-bold">Ref Photos</span>
+                <label className="text-[10px] text-neutral-400 hover:text-white flex items-center gap-1 bg-neutral-800 hover:bg-neutral-700 px-1.5 py-0.5 rounded transition-colors cursor-pointer">
+                  <Plus className="w-2.5 h-2.5" /> Add
+                  <input
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    className="hidden"
+                    onChange={(e) => {
+                      if (!e.target.files) return;
+                      const files = Array.from(e.target.files) as File[];
+                      files.forEach((file: File) => {
+                        const reader = new FileReader();
+                        reader.onloadend = () => {
+                          const base64 = reader.result as string;
+                          const current = shot.referenceImages || [];
+                          onUpdate(shot.id, { referenceImages: [...current, base64] });
+                        };
+                        reader.readAsDataURL(file);
+                      });
+                      e.target.value = '';
+                    }}
+                  />
+                </label>
+              </div>
+              {shot.referenceImages && shot.referenceImages.length > 0 ? (
+                <div className="flex gap-1.5 flex-wrap">
+                  {shot.referenceImages.map((img, idx) => (
+                    <div key={idx} className="relative group/ref flex-shrink-0">
+                      <img
+                        src={img}
+                        alt={`Ref ${idx + 1}`}
+                        className="w-12 h-12 object-cover rounded border border-neutral-700 hover:border-blue-500 transition-colors"
+                      />
+                      <button
+                        onClick={() => {
+                          const updated = shot.referenceImages!.filter((_, i) => i !== idx);
+                          onUpdate(shot.id, { referenceImages: updated });
+                        }}
+                        className="absolute -top-1 -right-1 bg-red-600 text-white rounded-full p-0.5 opacity-0 group-hover/ref:opacity-100 transition-opacity"
+                      >
+                        <X className="w-2.5 h-2.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <span className="text-[10px] text-neutral-600 italic">No reference photos — add images to guide generation</span>
+              )}
             </div>
           </div>
 

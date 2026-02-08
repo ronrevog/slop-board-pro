@@ -149,6 +149,7 @@ export interface Shot {
   characters: string[]; // IDs of characters present in shot
   locationId: string;
   referenceShotId?: string; // ID of another shot to use as visual reference
+  referenceImages?: string[]; // Base64 reference photos uploaded by user for visual consistency
   imageUrl?: string; // Base64
   imageHistory?: ImageHistoryEntry[]; // Version history of images
   videoUrl?: string; // Base64 or Blob URL
