@@ -314,6 +314,107 @@ export const generateKlingV2VReference = async (
     }
 };
 
+// ============================================================
+// Kling Video v2.6 Pro - Motion Control
+// ============================================================
+
+export interface KlingV26MotionControlInput {
+    prompt?: string;
+    image_url: string;
+    video_url: string;
+    character_orientation: 'image' | 'video';
+    keep_original_sound?: boolean;
+}
+
+export interface KlingV26MotionControlOutput {
+    video: {
+        url: string;
+        content_type?: string;
+        file_name?: string;
+        file_size?: number;
+    };
+}
+
+/**
+ * Generate a video using Kling v2.6 Pro Motion Control via fal.ai SDK.
+ * Takes a reference image (character/scene) and a motion reference video,
+ * and generates a new video where the character performs the motion.
+ */
+export const generateKlingV26MotionControl = async (
+    imageUrl: string,
+    videoUrl: string,
+    prompt: string,
+    options: {
+        characterOrientation: 'image' | 'video';
+        keepOriginalSound?: boolean;
+    },
+    falApiKey: string,
+    onProgress?: (status: string, position?: number) => void
+): Promise<string> => {
+    if (!falApiKey) {
+        throw new Error('fal.ai API key is required. Please add it in project settings.');
+    }
+
+    const cleanKey = falApiKey.trim().replace(/^Key\s+/i, '');
+    fal.config({ credentials: cleanKey });
+
+    const input: KlingV26MotionControlInput = {
+        prompt: prompt || undefined,
+        image_url: imageUrl,
+        video_url: videoUrl,
+        character_orientation: options.characterOrientation,
+        keep_original_sound: options.keepOriginalSound ?? true,
+    };
+
+    console.log('Submitting to Kling v2.6 Pro Motion Control:', { ...input, image_url: input.image_url.substring(0, 80) + '...', video_url: input.video_url.substring(0, 80) + '...' });
+    onProgress?.('Submitting to Kling v2.6 Motion Control...');
+
+    try {
+        const result = await fal.subscribe('fal-ai/kling-video/v2.6/pro/motion-control', {
+            input,
+            logs: true,
+            onQueueUpdate: (update) => {
+                if (update.status === 'IN_QUEUE') {
+                    const position = (update as any).queue_position;
+                    onProgress?.('In queue...', position);
+                } else if (update.status === 'IN_PROGRESS') {
+                    onProgress?.('Generating motion control video...');
+                    if (update.logs) {
+                        update.logs.forEach(log => console.log('Kling v2.6 log:', log.message));
+                    }
+                }
+            },
+        });
+
+        const videoData = result.data as KlingV26MotionControlOutput;
+        if (!videoData?.video?.url) {
+            throw new Error('No video URL in Kling v2.6 Motion Control result');
+        }
+
+        console.log('Kling v2.6 Motion Control video generated:', videoData.video.url);
+        onProgress?.('Downloading video...');
+
+        try {
+            const videoResponse = await fetch(videoData.video.url);
+            if (!videoResponse.ok) throw new Error('Failed to download video');
+            const blob = await videoResponse.blob();
+            return await blobToBase64(blob);
+        } catch (fetchError) {
+            console.warn('Could not fetch video blob, returning URL:', fetchError);
+            return videoData.video.url;
+        }
+    } catch (error: any) {
+        console.error('Kling v2.6 Motion Control error:', error);
+        if (error.status === 401 || error.message?.includes('401')) {
+            throw new Error('fal.ai API key is invalid.');
+        }
+        if (error.status === 403 || error.message?.includes('403')) {
+            throw new Error('fal.ai API key does not have permission for this model.');
+        }
+        throw new Error(error.message || 'Kling v2.6 Motion Control failed');
+    }
+};
+
 /**
  * Cancel is not directly supported by fal SDK subscribe
  * The generation will complete but result won't be used

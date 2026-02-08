@@ -1,9 +1,11 @@
 
 import React, { useState, useRef, useMemo } from 'react';
 import { Project, Character, Location, Shot, Scene } from '../types';
-import { generateKlingV2VReference, KlingElementInput, uploadFileToFal } from '../services/falService';
-import { Upload, Play, X, Plus, ImageIcon, Film, Users, MapPin, Camera, Loader2, Download, AlertCircle, Check, Clapperboard } from 'lucide-react';
+import { generateKlingV2VReference, generateKlingV26MotionControl, KlingElementInput, uploadFileToFal } from '../services/falService';
+import { Upload, Play, X, Plus, ImageIcon, Film, Users, MapPin, Camera, Loader2, Download, AlertCircle, Check, Clapperboard, ToggleLeft, ToggleRight } from 'lucide-react';
 import { Button } from './Button';
+
+type KlingModel = 'o3' | 'v26';
 
 interface ProjectImage {
     id: string;
@@ -20,6 +22,8 @@ interface MotionControlProps {
 
 export const MotionControl: React.FC<MotionControlProps> = ({ project }) => {
     // --- State ---
+    const [model, setModel] = useState<KlingModel>('o3');
+
     const [videoFile, setVideoFile] = useState<File | null>(null);
     const [videoPreviewUrl, setVideoPreviewUrl] = useState<string>('');
     const [uploadedVideoUrl, setUploadedVideoUrl] = useState<string>('');
@@ -29,6 +33,10 @@ export const MotionControl: React.FC<MotionControlProps> = ({ project }) => {
     const [duration, setDuration] = useState('5');
     const [aspectRatio, setAspectRatio] = useState<'auto' | '16:9' | '9:16' | '1:1'>('auto');
     const [keepAudio, setKeepAudio] = useState(true);
+
+    // v2.6 specific state
+    const [v26RefImageUrl, setV26RefImageUrl] = useState<string>('');
+    const [v26CharOrientation, setV26CharOrientation] = useState<'image' | 'video'>('video');
 
     const [selectedImageUrls, setSelectedImageUrls] = useState<string[]>([]);
     const [elements, setElements] = useState<KlingElementInput[]>([]);
@@ -152,12 +160,14 @@ export const MotionControl: React.FC<MotionControlProps> = ({ project }) => {
             setError('Please upload a source video first.');
             return;
         }
-        if (!prompt.trim()) {
-            setError('Please enter a prompt.');
-            return;
-        }
         if (!falApiKey) {
             setError('fal.ai API key required. Set it in Settings → Video Provider.');
+            return;
+        }
+
+        // v2.6 requires a reference image
+        if (model === 'v26' && !v26RefImageUrl) {
+            setError('Please select a reference image for v2.6 Motion Control.');
             return;
         }
 
@@ -167,61 +177,90 @@ export const MotionControl: React.FC<MotionControlProps> = ({ project }) => {
         setProgressStatus('Starting...');
 
         try {
-            // Upload selected reference images to fal storage (they need to be URLs)
-            const uploadedImageUrls: string[] = [];
-            for (const imgUrl of selectedImageUrls) {
-                setProgressStatus(`Uploading reference image ${uploadedImageUrls.length + 1}/${selectedImageUrls.length}...`);
-                // Convert base64 to blob then upload
-                const response = await fetch(imgUrl);
-                const blob = await response.blob();
-                const file = new File([blob], `ref-${uploadedImageUrls.length}.png`, { type: blob.type || 'image/png' });
-                const url = await uploadFileToFal(file, falApiKey);
-                uploadedImageUrls.push(url);
-            }
+            let resultUrl: string;
 
-            // Upload element images
-            const uploadedElements: KlingElementInput[] = [];
-            for (const elem of elements) {
-                let frontalUrl: string | undefined;
-                let refUrls: string[] = [];
+            if (model === 'v26') {
+                // --- Kling v2.6 Motion Control ---
+                setProgressStatus('Uploading reference image...');
+                const imgResp = await fetch(v26RefImageUrl);
+                const imgBlob = await imgResp.blob();
+                const imgFile = new File([imgBlob], 'ref-image.png', { type: imgBlob.type || 'image/png' });
+                const uploadedImageUrl = await uploadFileToFal(imgFile, falApiKey);
 
-                if (elem.frontal_image_url) {
-                    setProgressStatus('Uploading element frontal image...');
-                    const resp = await fetch(elem.frontal_image_url);
-                    const blob = await resp.blob();
-                    const file = new File([blob], 'element-frontal.png', { type: blob.type || 'image/png' });
-                    frontalUrl = await uploadFileToFal(file, falApiKey);
+                resultUrl = await generateKlingV26MotionControl(
+                    uploadedImageUrl,
+                    uploadedVideoUrl,
+                    prompt,
+                    {
+                        characterOrientation: v26CharOrientation,
+                        keepOriginalSound: keepAudio,
+                    },
+                    falApiKey,
+                    (status) => setProgressStatus(status)
+                );
+            } else {
+                // --- Kling O3 Pro V2V Reference ---
+                if (!prompt.trim()) {
+                    setError('Please enter a prompt.');
+                    setIsGenerating(false);
+                    return;
                 }
 
-                if (elem.reference_image_urls?.length) {
-                    for (const refImg of elem.reference_image_urls) {
-                        setProgressStatus('Uploading element reference image...');
-                        const resp = await fetch(refImg);
+                // Upload selected reference images to fal storage
+                const uploadedImageUrls: string[] = [];
+                for (const imgUrl of selectedImageUrls) {
+                    setProgressStatus(`Uploading reference image ${uploadedImageUrls.length + 1}/${selectedImageUrls.length}...`);
+                    const response = await fetch(imgUrl);
+                    const blob = await response.blob();
+                    const file = new File([blob], `ref-${uploadedImageUrls.length}.png`, { type: blob.type || 'image/png' });
+                    const url = await uploadFileToFal(file, falApiKey);
+                    uploadedImageUrls.push(url);
+                }
+
+                // Upload element images
+                const uploadedElements: KlingElementInput[] = [];
+                for (const elem of elements) {
+                    let frontalUrl: string | undefined;
+                    let refUrls: string[] = [];
+
+                    if (elem.frontal_image_url) {
+                        setProgressStatus('Uploading element frontal image...');
+                        const resp = await fetch(elem.frontal_image_url);
                         const blob = await resp.blob();
-                        const file = new File([blob], 'element-ref.png', { type: blob.type || 'image/png' });
-                        const url = await uploadFileToFal(file, falApiKey);
-                        refUrls.push(url);
+                        const file = new File([blob], 'element-frontal.png', { type: blob.type || 'image/png' });
+                        frontalUrl = await uploadFileToFal(file, falApiKey);
+                    }
+
+                    if (elem.reference_image_urls?.length) {
+                        for (const refImg of elem.reference_image_urls) {
+                            setProgressStatus('Uploading element reference image...');
+                            const resp = await fetch(refImg);
+                            const blob = await resp.blob();
+                            const file = new File([blob], 'element-ref.png', { type: blob.type || 'image/png' });
+                            const url = await uploadFileToFal(file, falApiKey);
+                            refUrls.push(url);
+                        }
+                    }
+
+                    if (frontalUrl || refUrls.length > 0) {
+                        uploadedElements.push({ frontal_image_url: frontalUrl, reference_image_urls: refUrls.length > 0 ? refUrls : undefined });
                     }
                 }
 
-                if (frontalUrl || refUrls.length > 0) {
-                    uploadedElements.push({ frontal_image_url: frontalUrl, reference_image_urls: refUrls.length > 0 ? refUrls : undefined });
-                }
+                resultUrl = await generateKlingV2VReference(
+                    uploadedVideoUrl,
+                    prompt,
+                    {
+                        imageUrls: uploadedImageUrls.length > 0 ? uploadedImageUrls : undefined,
+                        elements: uploadedElements.length > 0 ? uploadedElements : undefined,
+                        aspectRatio,
+                        duration,
+                        keepAudio,
+                    },
+                    falApiKey,
+                    (status) => setProgressStatus(status)
+                );
             }
-
-            const resultUrl = await generateKlingV2VReference(
-                uploadedVideoUrl,
-                prompt,
-                {
-                    imageUrls: uploadedImageUrls.length > 0 ? uploadedImageUrls : undefined,
-                    elements: uploadedElements.length > 0 ? uploadedElements : undefined,
-                    aspectRatio,
-                    duration,
-                    keepAudio,
-                },
-                falApiKey,
-                (status) => setProgressStatus(status)
-            );
 
             setResultVideoUrl(resultUrl);
             setProgressStatus('');
@@ -322,10 +361,30 @@ export const MotionControl: React.FC<MotionControlProps> = ({ project }) => {
             <div className="flex items-center gap-3 mb-2">
                 <Clapperboard className="w-6 h-6 text-purple-500" />
                 <h2 className="text-2xl font-serif text-white">Motion Control</h2>
-                <span className="text-xs text-neutral-500 bg-neutral-800 px-2 py-0.5 rounded">Kling O3 Pro V2V</span>
             </div>
-            <p className="text-sm text-neutral-400 -mt-4">
-                Transform a reference video using Kling O3 Pro with character elements and style reference images from your project.
+
+            {/* Model Switcher */}
+            <div className="flex gap-2 -mt-4">
+                <button
+                    onClick={() => setModel('o3')}
+                    className={`px-4 py-2 text-sm font-medium rounded-lg border-2 transition-all ${model === 'o3' ? 'border-purple-600 bg-purple-900/20 text-purple-300' : 'border-neutral-700 bg-neutral-800/50 text-neutral-400 hover:border-neutral-500'}`}
+                >
+                    <div className="font-bold text-xs">Kling O3 Pro</div>
+                    <div className="text-[10px] text-neutral-500 mt-0.5">V2V Reference • Elements • Multi-image</div>
+                </button>
+                <button
+                    onClick={() => setModel('v26')}
+                    className={`px-4 py-2 text-sm font-medium rounded-lg border-2 transition-all ${model === 'v26' ? 'border-blue-600 bg-blue-900/20 text-blue-300' : 'border-neutral-700 bg-neutral-800/50 text-neutral-400 hover:border-neutral-500'}`}
+                >
+                    <div className="font-bold text-xs">Kling v2.6 Pro</div>
+                    <div className="text-[10px] text-neutral-500 mt-0.5">Motion Control • Character orientation • Up to 30s</div>
+                </button>
+            </div>
+
+            <p className="text-sm text-neutral-400">
+                {model === 'o3'
+                    ? 'Transform a reference video using Kling O3 Pro with character elements and style reference images.'
+                    : 'Transfer motion from a reference video onto a character image with orientation control. Up to 30s video input.'}
             </p>
 
             {!falApiKey && (
@@ -390,34 +449,62 @@ export const MotionControl: React.FC<MotionControlProps> = ({ project }) => {
                     <div className="bg-neutral-900 border border-neutral-800 rounded-lg p-5 space-y-4">
                         <h3 className="text-sm font-bold text-neutral-300 uppercase tracking-widest mb-2">Settings</h3>
 
-                        <div className="grid grid-cols-3 gap-3">
-                            <div>
-                                <label className="text-[10px] text-neutral-500 uppercase tracking-widest font-bold">Duration</label>
-                                <select value={duration} onChange={e => setDuration(e.target.value)} className="mt-1 w-full bg-neutral-800 text-xs text-white border border-neutral-700 rounded px-2 py-1.5 outline-none">
-                                    {['3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '14', '15'].map(d => (
-                                        <option key={d} value={d}>{d}s</option>
-                                    ))}
-                                </select>
+                        {model === 'o3' ? (
+                            <div className="grid grid-cols-3 gap-3">
+                                <div>
+                                    <label className="text-[10px] text-neutral-500 uppercase tracking-widest font-bold">Duration</label>
+                                    <select value={duration} onChange={e => setDuration(e.target.value)} className="mt-1 w-full bg-neutral-800 text-xs text-white border border-neutral-700 rounded px-2 py-1.5 outline-none">
+                                        {['3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '14', '15'].map(d => (
+                                            <option key={d} value={d}>{d}s</option>
+                                        ))}
+                                    </select>
+                                </div>
+                                <div>
+                                    <label className="text-[10px] text-neutral-500 uppercase tracking-widest font-bold">Aspect Ratio</label>
+                                    <select value={aspectRatio} onChange={e => setAspectRatio(e.target.value as any)} className="mt-1 w-full bg-neutral-800 text-xs text-white border border-neutral-700 rounded px-2 py-1.5 outline-none">
+                                        <option value="auto">Auto</option>
+                                        <option value="16:9">16:9</option>
+                                        <option value="9:16">9:16</option>
+                                        <option value="1:1">1:1</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label className="text-[10px] text-neutral-500 uppercase tracking-widest font-bold">Keep Audio</label>
+                                    <button
+                                        onClick={() => setKeepAudio(!keepAudio)}
+                                        className={`mt-1 w-full text-xs px-2 py-1.5 rounded border transition-colors ${keepAudio ? 'bg-green-900/30 border-green-700 text-green-400' : 'bg-neutral-800 border-neutral-700 text-neutral-500'}`}
+                                    >
+                                        {keepAudio ? 'Yes' : 'No'}
+                                    </button>
+                                </div>
                             </div>
-                            <div>
-                                <label className="text-[10px] text-neutral-500 uppercase tracking-widest font-bold">Aspect Ratio</label>
-                                <select value={aspectRatio} onChange={e => setAspectRatio(e.target.value as any)} className="mt-1 w-full bg-neutral-800 text-xs text-white border border-neutral-700 rounded px-2 py-1.5 outline-none">
-                                    <option value="auto">Auto</option>
-                                    <option value="16:9">16:9</option>
-                                    <option value="9:16">9:16</option>
-                                    <option value="1:1">1:1</option>
-                                </select>
+                        ) : (
+                            <div className="space-y-4">
+                                <div className="grid grid-cols-2 gap-3">
+                                    <div>
+                                        <label className="text-[10px] text-neutral-500 uppercase tracking-widest font-bold">Character Orientation</label>
+                                        <select value={v26CharOrientation} onChange={e => setV26CharOrientation(e.target.value as 'image' | 'video')} className="mt-1 w-full bg-neutral-800 text-xs text-white border border-neutral-700 rounded px-2 py-1.5 outline-none">
+                                            <option value="video">Video (match ref video, max 30s)</option>
+                                            <option value="image">Image (match ref image, max 10s)</option>
+                                        </select>
+                                        <p className="text-[9px] text-neutral-600 mt-1">
+                                            {v26CharOrientation === 'video'
+                                                ? "'video': Better for complex motions. Output matches reference video orientation."
+                                                : "'image': Better for camera movements. Output matches reference image orientation."}
+                                        </p>
+                                    </div>
+                                    <div>
+                                        <label className="text-[10px] text-neutral-500 uppercase tracking-widest font-bold">Keep Original Sound</label>
+                                        <button
+                                            onClick={() => setKeepAudio(!keepAudio)}
+                                            className={`mt-1 w-full text-xs px-2 py-1.5 rounded border transition-colors ${keepAudio ? 'bg-green-900/30 border-green-700 text-green-400' : 'bg-neutral-800 border-neutral-700 text-neutral-500'}`}
+                                        >
+                                            {keepAudio ? 'Yes' : 'No'}
+                                        </button>
+                                    </div>
+                                </div>
                             </div>
-                            <div>
-                                <label className="text-[10px] text-neutral-500 uppercase tracking-widest font-bold">Keep Audio</label>
-                                <button
-                                    onClick={() => setKeepAudio(!keepAudio)}
-                                    className={`mt-1 w-full text-xs px-2 py-1.5 rounded border transition-colors ${keepAudio ? 'bg-green-900/30 border-green-700 text-green-400' : 'bg-neutral-800 border-neutral-700 text-neutral-500'}`}
-                                >
-                                    {keepAudio ? 'Yes' : 'No'}
-                                </button>
-                            </div>
-                        </div>
+                        )}
                     </div>
 
                     {/* Prompt */}
@@ -435,119 +522,168 @@ export const MotionControl: React.FC<MotionControlProps> = ({ project }) => {
                     </div>
                 </div>
 
-                {/* RIGHT COLUMN — Reference Images + Elements + Result */}
+                {/* RIGHT COLUMN */}
                 <div className="space-y-6">
-                    {/* Reference Images */}
-                    <div className="bg-neutral-900 border border-neutral-800 rounded-lg p-5">
-                        <div className="flex items-center justify-between mb-3">
-                            <h3 className="text-sm font-bold text-neutral-300 uppercase tracking-widest flex items-center gap-2">
-                                <ImageIcon className="w-4 h-4 text-blue-400" /> Reference Images
-                            </h3>
-                            <button
-                                onClick={() => { setImageBrowserMode('reference'); setImageBrowserOpen(true); }}
-                                className="text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1 bg-neutral-800 hover:bg-neutral-700 px-2 py-1 rounded transition-colors"
-                            >
-                                <Plus className="w-3 h-3" /> Browse Project Images
-                            </button>
-                        </div>
-                        <p className="text-[10px] text-neutral-500 mb-3">Style/appearance references. Referenced in prompt as @Image1, @Image2, etc. Max 4 total.</p>
-
-                        {selectedImageUrls.length > 0 ? (
-                            <div className="flex gap-2 flex-wrap">
-                                {selectedImageUrls.map((url, idx) => (
-                                    <div key={idx} className="relative group/img flex-shrink-0">
-                                        <img src={url} alt={`Ref ${idx + 1}`} className="w-20 h-20 object-cover rounded-lg border border-neutral-700" />
-                                        <div className="absolute top-1 left-1 bg-blue-600 text-white text-[9px] px-1 rounded font-bold">@Image{idx + 1}</div>
-                                        <button
-                                            onClick={() => setSelectedImageUrls(prev => prev.filter((_, i) => i !== idx))}
-                                            className="absolute -top-1 -right-1 bg-red-600 text-white rounded-full p-0.5 opacity-0 group-hover/img:opacity-100 transition-opacity"
-                                        >
-                                            <X className="w-3 h-3" />
-                                        </button>
-                                    </div>
-                                ))}
+                    {model === 'v26' ? (
+                        /* v2.6 — Single Reference Image (Required) */
+                        <div className="bg-neutral-900 border border-blue-900/30 rounded-lg p-5">
+                            <div className="flex items-center justify-between mb-3">
+                                <h3 className="text-sm font-bold text-neutral-300 uppercase tracking-widest flex items-center gap-2">
+                                    <ImageIcon className="w-4 h-4 text-blue-400" /> Reference Image <span className="text-red-500 text-[10px]">Required</span>
+                                </h3>
                             </div>
-                        ) : (
-                            <div className="text-xs text-neutral-600 italic">No reference images selected</div>
-                        )}
-                    </div>
+                            <p className="text-[10px] text-neutral-500 mb-3">
+                                Character/scene reference image. Characters should have clear body proportions, avoid occlusion, and occupy &gt;5% of image area.
+                            </p>
 
-                    {/* Elements (Characters/Objects) */}
-                    <div className="bg-neutral-900 border border-neutral-800 rounded-lg p-5">
-                        <div className="flex items-center justify-between mb-3">
-                            <h3 className="text-sm font-bold text-neutral-300 uppercase tracking-widest flex items-center gap-2">
-                                <Users className="w-4 h-4 text-green-400" /> Elements
-                            </h3>
-                            <button
-                                onClick={handleAddElement}
-                                className="text-xs text-green-400 hover:text-green-300 flex items-center gap-1 bg-neutral-800 hover:bg-neutral-700 px-2 py-1 rounded transition-colors"
-                            >
-                                <Plus className="w-3 h-3" /> Add Element
-                            </button>
-                        </div>
-                        <p className="text-[10px] text-neutral-500 mb-3">Characters/objects to inject. Referenced in prompt as @Element1, @Element2, etc.</p>
-
-                        {elements.length > 0 ? (
-                            <div className="space-y-3">
-                                {elements.map((elem, idx) => (
-                                    <div key={idx} className="bg-neutral-800 rounded-lg p-3 border border-neutral-700">
-                                        <div className="flex items-center justify-between mb-2">
-                                            <span className="text-xs font-bold text-green-400">@Element{idx + 1}</span>
-                                            <button onClick={() => handleRemoveElement(idx)} className="text-neutral-600 hover:text-red-500"><X className="w-3 h-3" /></button>
-                                        </div>
-                                        <div className="flex gap-3">
-                                            {/* Frontal */}
-                                            <div>
-                                                <span className="text-[10px] text-neutral-500 block mb-1">Frontal</span>
-                                                {elem.frontal_image_url ? (
-                                                    <div className="relative group/ef">
-                                                        <img src={elem.frontal_image_url} className="w-16 h-16 object-cover rounded border border-neutral-600" />
-                                                        <button
-                                                            onClick={() => setElements(prev => { const u = [...prev]; u[idx] = { ...u[idx], frontal_image_url: undefined }; return u; })}
-                                                            className="absolute -top-1 -right-1 bg-red-600 text-white rounded-full p-0.5 opacity-0 group-hover/ef:opacity-100 transition-opacity"
-                                                        ><X className="w-2.5 h-2.5" /></button>
-                                                    </div>
-                                                ) : (
-                                                    <button
-                                                        onClick={() => { setActiveElementIndex(idx); setImageBrowserMode('element-frontal'); setImageBrowserOpen(true); }}
-                                                        className="w-16 h-16 border-2 border-dashed border-neutral-600 hover:border-green-600 rounded flex items-center justify-center text-neutral-600 hover:text-green-400 transition-colors"
-                                                    ><Plus className="w-4 h-4" /></button>
-                                                )}
+                            {v26RefImageUrl ? (
+                                <div className="relative group/v26img inline-block">
+                                    <img src={v26RefImageUrl} alt="Reference" className="w-48 h-48 object-cover rounded-lg border-2 border-blue-600" />
+                                    <button
+                                        onClick={() => setV26RefImageUrl('')}
+                                        className="absolute -top-2 -right-2 bg-red-600 text-white rounded-full p-1 opacity-0 group-hover/v26img:opacity-100 transition-opacity"
+                                    >
+                                        <X className="w-3 h-3" />
+                                    </button>
+                                </div>
+                            ) : (
+                                <div className="grid grid-cols-4 sm:grid-cols-5 gap-2 max-h-64 overflow-y-auto custom-scrollbar">
+                                    {allProjectImages.length > 0 ? allProjectImages.map(img => (
+                                        <button
+                                            key={img.id}
+                                            onClick={() => setV26RefImageUrl(img.url)}
+                                            className="relative group rounded-lg overflow-hidden border-2 border-neutral-700 hover:border-blue-500 transition-all"
+                                        >
+                                            <img src={img.url} alt={img.label} className="w-full aspect-square object-cover" />
+                                            <div className="absolute bottom-0 left-0 right-0 bg-black/80 text-[9px] text-neutral-300 p-1 truncate">
+                                                {img.sourceName}
                                             </div>
-                                            {/* References */}
-                                            <div className="flex-1">
-                                                <div className="flex items-center justify-between mb-1">
-                                                    <span className="text-[10px] text-neutral-500">Angle Refs (1-3)</span>
-                                                    {(elem.reference_image_urls?.length || 0) < 3 && (
-                                                        <button
-                                                            onClick={() => { setActiveElementIndex(idx); setImageBrowserMode('element-ref'); setImageBrowserOpen(true); }}
-                                                            className="text-[10px] text-green-400 hover:text-green-300"
-                                                        ><Plus className="w-3 h-3 inline" /> Add</button>
-                                                    )}
-                                                </div>
-                                                <div className="flex gap-1.5">
-                                                    {elem.reference_image_urls?.map((url, ri) => (
-                                                        <div key={ri} className="relative group/er">
-                                                            <img src={url} className="w-12 h-12 object-cover rounded border border-neutral-600" />
+                                        </button>
+                                    )) : (
+                                        <div className="col-span-full text-center py-8 text-neutral-500 text-xs">
+                                            No images in project yet.
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+                    ) : (
+                        /* O3 — Reference Images (multi) */
+                        <>
+                            <div className="bg-neutral-900 border border-neutral-800 rounded-lg p-5">
+                                <div className="flex items-center justify-between mb-3">
+                                    <h3 className="text-sm font-bold text-neutral-300 uppercase tracking-widest flex items-center gap-2">
+                                        <ImageIcon className="w-4 h-4 text-blue-400" /> Reference Images
+                                    </h3>
+                                    <button
+                                        onClick={() => { setImageBrowserMode('reference'); setImageBrowserOpen(true); }}
+                                        className="text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1 bg-neutral-800 hover:bg-neutral-700 px-2 py-1 rounded transition-colors"
+                                    >
+                                        <Plus className="w-3 h-3" /> Browse Project Images
+                                    </button>
+                                </div>
+                                <p className="text-[10px] text-neutral-500 mb-3">Style/appearance references. Referenced in prompt as @Image1, @Image2, etc. Max 4 total.</p>
+
+                                {selectedImageUrls.length > 0 ? (
+                                    <div className="flex gap-2 flex-wrap">
+                                        {selectedImageUrls.map((url, idx) => (
+                                            <div key={idx} className="relative group/img flex-shrink-0">
+                                                <img src={url} alt={`Ref ${idx + 1}`} className="w-20 h-20 object-cover rounded-lg border border-neutral-700" />
+                                                <div className="absolute top-1 left-1 bg-blue-600 text-white text-[9px] px-1 rounded font-bold">@Image{idx + 1}</div>
+                                                <button
+                                                    onClick={() => setSelectedImageUrls(prev => prev.filter((_, i) => i !== idx))}
+                                                    className="absolute -top-1 -right-1 bg-red-600 text-white rounded-full p-0.5 opacity-0 group-hover/img:opacity-100 transition-opacity"
+                                                >
+                                                    <X className="w-3 h-3" />
+                                                </button>
+                                            </div>
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <div className="text-xs text-neutral-600 italic">No reference images selected</div>
+                                )}
+                            </div>
+                        </>
+                    )}
+
+                    {/* Elements (Characters/Objects) — O3 only */}
+                    {model === 'o3' && (
+                        <div className="bg-neutral-900 border border-neutral-800 rounded-lg p-5">
+                            <div className="flex items-center justify-between mb-3">
+                                <h3 className="text-sm font-bold text-neutral-300 uppercase tracking-widest flex items-center gap-2">
+                                    <Users className="w-4 h-4 text-green-400" /> Elements
+                                </h3>
+                                <button
+                                    onClick={handleAddElement}
+                                    className="text-xs text-green-400 hover:text-green-300 flex items-center gap-1 bg-neutral-800 hover:bg-neutral-700 px-2 py-1 rounded transition-colors"
+                                >
+                                    <Plus className="w-3 h-3" /> Add Element
+                                </button>
+                            </div>
+                            <p className="text-[10px] text-neutral-500 mb-3">Characters/objects to inject. Referenced in prompt as @Element1, @Element2, etc.</p>
+
+                            {elements.length > 0 ? (
+                                <div className="space-y-3">
+                                    {elements.map((elem, idx) => (
+                                        <div key={idx} className="bg-neutral-800 rounded-lg p-3 border border-neutral-700">
+                                            <div className="flex items-center justify-between mb-2">
+                                                <span className="text-xs font-bold text-green-400">@Element{idx + 1}</span>
+                                                <button onClick={() => handleRemoveElement(idx)} className="text-neutral-600 hover:text-red-500"><X className="w-3 h-3" /></button>
+                                            </div>
+                                            <div className="flex gap-3">
+                                                {/* Frontal */}
+                                                <div>
+                                                    <span className="text-[10px] text-neutral-500 block mb-1">Frontal</span>
+                                                    {elem.frontal_image_url ? (
+                                                        <div className="relative group/ef">
+                                                            <img src={elem.frontal_image_url} className="w-16 h-16 object-cover rounded border border-neutral-600" />
                                                             <button
-                                                                onClick={() => setElements(prev => { const u = [...prev]; u[idx] = { ...u[idx], reference_image_urls: u[idx].reference_image_urls?.filter((_, i) => i !== ri) }; return u; })}
-                                                                className="absolute -top-1 -right-1 bg-red-600 text-white rounded-full p-0.5 opacity-0 group-hover/er:opacity-100 transition-opacity"
+                                                                onClick={() => setElements(prev => { const u = [...prev]; u[idx] = { ...u[idx], frontal_image_url: undefined }; return u; })}
+                                                                className="absolute -top-1 -right-1 bg-red-600 text-white rounded-full p-0.5 opacity-0 group-hover/ef:opacity-100 transition-opacity"
                                                             ><X className="w-2.5 h-2.5" /></button>
                                                         </div>
-                                                    ))}
-                                                    {(!elem.reference_image_urls || elem.reference_image_urls.length === 0) && (
-                                                        <span className="text-[10px] text-neutral-600 italic mt-3">No angle refs</span>
+                                                    ) : (
+                                                        <button
+                                                            onClick={() => { setActiveElementIndex(idx); setImageBrowserMode('element-frontal'); setImageBrowserOpen(true); }}
+                                                            className="w-16 h-16 border-2 border-dashed border-neutral-600 hover:border-green-600 rounded flex items-center justify-center text-neutral-600 hover:text-green-400 transition-colors"
+                                                        ><Plus className="w-4 h-4" /></button>
                                                     )}
+                                                </div>
+                                                {/* References */}
+                                                <div className="flex-1">
+                                                    <div className="flex items-center justify-between mb-1">
+                                                        <span className="text-[10px] text-neutral-500">Angle Refs (1-3)</span>
+                                                        {(elem.reference_image_urls?.length || 0) < 3 && (
+                                                            <button
+                                                                onClick={() => { setActiveElementIndex(idx); setImageBrowserMode('element-ref'); setImageBrowserOpen(true); }}
+                                                                className="text-[10px] text-green-400 hover:text-green-300"
+                                                            ><Plus className="w-3 h-3 inline" /> Add</button>
+                                                        )}
+                                                    </div>
+                                                    <div className="flex gap-1.5">
+                                                        {elem.reference_image_urls?.map((url, ri) => (
+                                                            <div key={ri} className="relative group/er">
+                                                                <img src={url} className="w-12 h-12 object-cover rounded border border-neutral-600" />
+                                                                <button
+                                                                    onClick={() => setElements(prev => { const u = [...prev]; u[idx] = { ...u[idx], reference_image_urls: u[idx].reference_image_urls?.filter((_, i) => i !== ri) }; return u; })}
+                                                                    className="absolute -top-1 -right-1 bg-red-600 text-white rounded-full p-0.5 opacity-0 group-hover/er:opacity-100 transition-opacity"
+                                                                ><X className="w-2.5 h-2.5" /></button>
+                                                            </div>
+                                                        ))}
+                                                        {(!elem.reference_image_urls || elem.reference_image_urls.length === 0) && (
+                                                            <span className="text-[10px] text-neutral-600 italic mt-3">No angle refs</span>
+                                                        )}
+                                                    </div>
                                                 </div>
                                             </div>
                                         </div>
-                                    </div>
-                                ))}
-                            </div>
-                        ) : (
-                            <div className="text-xs text-neutral-600 italic">No elements added — add characters/objects to inject into the video</div>
-                        )}
-                    </div>
+                                    ))}
+                                </div>
+                            ) : (
+                                <div className="text-xs text-neutral-600 italic">No elements added — add characters/objects to inject into the video</div>
+                            )}
+                        </div>
+                    )}
 
                     {/* Generate Button */}
                     <Button
@@ -555,7 +691,7 @@ export const MotionControl: React.FC<MotionControlProps> = ({ project }) => {
                         size="lg"
                         onClick={handleGenerate}
                         isLoading={isGenerating}
-                        disabled={!uploadedVideoUrl || !prompt.trim() || isGenerating || !falApiKey}
+                        disabled={!uploadedVideoUrl || isGenerating || !falApiKey || (model === 'o3' && !prompt.trim()) || (model === 'v26' && !v26RefImageUrl)}
                         className="w-full py-3 text-base"
                     >
                         {isGenerating ? (
