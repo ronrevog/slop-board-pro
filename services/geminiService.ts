@@ -1,5 +1,5 @@
 
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, ThinkingLevel } from "@google/genai";
 import { CinematicSettings, Character, Location, Shot, ChatMessage } from "../types";
 import { ANAMORPHIC_LENS_PROMPTS } from "../constants";
 
@@ -47,7 +47,7 @@ const mapResolutionToVideoRes = (resolution: string, model?: 'fast' | 'quality')
 
 // Map project aspect ratio to Gemini API-supported ratios
 const mapAspectRatio = (ratio: string): string => {
-  // Gemini supports: 1:1, 2:3, 3:2, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, 21:9
+  // Gemini supports: 1:1, 2:3, 3:2, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, 21:9, 1:4, 4:1, 1:8, 8:1
   const mapping: Record<string, string> = {
     '1:1': '1:1',
     '2:3': '2:3',
@@ -60,6 +60,10 @@ const mapAspectRatio = (ratio: string): string => {
     '16:9': '16:9',
     '21:9': '21:9',
     '2.39:1': '21:9', // Cinemascope maps to ultra-wide
+    '1:4': '1:4',
+    '4:1': '4:1',
+    '1:8': '1:8',
+    '8:1': '8:1',
   };
   return mapping[ratio] || '16:9';
 };
@@ -797,7 +801,7 @@ const getAdjacentShotsWithImages = (
 
 /**
  * Generates an image for a Character or Location asset.
- * Uses gemini-3-pro-image-preview for maximum quality.
+ * Uses gemini-3.1-flash-image-preview for maximum quality.
  */
 export const generateAssetImage = async (
   type: 'Character' | 'Location',
@@ -813,9 +817,12 @@ export const generateAssetImage = async (
 
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-3-pro-image-preview',
+      model: 'gemini-3.1-flash-image-preview',
       contents: { parts: [{ text: prompt }] },
       config: {
+        responseModalities: ["IMAGE"],
+        tools: [{ googleSearch: {} }],
+        thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH },
         imageConfig: {
           aspectRatio: '1:1',
           imageSize: '2K'
@@ -840,7 +847,7 @@ export const generateAssetImage = async (
 
 /**
  * Generates a cinematic storyboard image for a specific shot.
- * Uses gemini-3-pro-image-preview for Multimodal input support and strict consistency.
+ * Uses gemini-3.1-flash-image-preview for Multimodal input support and strict consistency.
  * FALLBACK: If multimodal fails (500 error), falls back to text-only description generation.
  */
 export const generateShotImage = async (
@@ -1107,9 +1114,12 @@ Maintain visual continuity: same color grade, lighting, environment details, and
     const targetImageSize = mapResolutionToImageSize(settings.resolution || '1080p');
 
     const response = await ai.models.generateContent({
-      model: 'gemini-3-pro-image-preview',
+      model: 'gemini-3.1-flash-image-preview',
       contents: { parts: parts },
       config: {
+        responseModalities: ["IMAGE"],
+        tools: [{ googleSearch: {} }],
+        thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH },
         imageConfig: {
           aspectRatio: targetRatio,
           imageSize: targetImageSize
@@ -1143,9 +1153,12 @@ Maintain visual continuity: same color grade, lighting, environment details, and
       const fallbackImageSize = mapResolutionToImageSize(settings.resolution || '1080p');
 
       const response = await ai.models.generateContent({
-        model: 'gemini-3-pro-image-preview',
+        model: 'gemini-3.1-flash-image-preview',
         contents: { parts: [{ text: fallbackPrompt }] },
         config: {
+          responseModalities: ["IMAGE"],
+          tools: [{ googleSearch: {} }],
+          thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH },
           imageConfig: {
             aspectRatio: targetRatio,
             imageSize: fallbackImageSize
@@ -1339,9 +1352,12 @@ export const alterShotImage = async (
 
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-3-pro-image-preview',
+      model: 'gemini-3.1-flash-image-preview',
       contents: { parts: parts },
       config: {
+        responseModalities: ["IMAGE"],
+        tools: [{ googleSearch: {} }],
+        thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH },
         imageConfig: {
           aspectRatio: targetRatio,
           imageSize: mapResolutionToImageSize(settings.resolution || '1080p')
@@ -1423,7 +1439,7 @@ INSTRUCTIONS:
 
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-3-pro-image-preview',
+      model: 'gemini-3.1-flash-image-preview',
       contents: {
         parts: [
           {
@@ -1436,6 +1452,9 @@ INSTRUCTIONS:
         ]
       },
       config: {
+        responseModalities: ["IMAGE"],
+        tools: [{ googleSearch: {} }],
+        thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH },
         imageConfig: {
           aspectRatio: '1:1',
           imageSize: '2K'
@@ -1486,7 +1505,7 @@ CRITICAL RULES:
 
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-3-pro-image-preview',
+      model: 'gemini-3.1-flash-image-preview',
       contents: {
         parts: [
           {
@@ -1499,6 +1518,9 @@ CRITICAL RULES:
         ]
       },
       config: {
+        responseModalities: ["IMAGE"],
+        tools: [{ googleSearch: {} }],
+        thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH },
         imageConfig: {
           aspectRatio: targetRatio,
           imageSize: '4K'
@@ -1576,9 +1598,12 @@ CRITICAL RULES:
       ];
 
       const response = await ai.models.generateContent({
-        model: 'gemini-3-pro-image-preview',
+        model: 'gemini-3.1-flash-image-preview',
         contents: { parts },
         config: {
+          responseModalities: ["IMAGE"],
+          tools: [{ googleSearch: {} }],
+          thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH },
           imageConfig: {
             aspectRatio: '16:9',
             imageSize: '2K'
@@ -1658,9 +1683,12 @@ CRITICAL RULES:
       ];
 
       const response = await ai.models.generateContent({
-        model: 'gemini-3-pro-image-preview',
+        model: 'gemini-3.1-flash-image-preview',
         contents: { parts },
         config: {
+          responseModalities: ["IMAGE"],
+          tools: [{ googleSearch: {} }],
+          thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH },
           imageConfig: {
             aspectRatio: '3:4',
             imageSize: '2K'
@@ -1746,9 +1774,12 @@ RULES:
 
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-3-pro-image-preview',
+      model: 'gemini-3.1-flash-image-preview',
       contents: { parts },
       config: {
+        responseModalities: ["IMAGE"],
+        tools: [{ googleSearch: {} }],
+        thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH },
         imageConfig: {
           aspectRatio: targetRatio,
           imageSize: '2K'
@@ -1778,7 +1809,7 @@ export const editImage = async (base64Image: string, prompt: string): Promise<st
 
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-3-pro-image-preview',
+      model: 'gemini-3.1-flash-image-preview',
       contents: {
         parts: [
           {
@@ -1791,6 +1822,9 @@ export const editImage = async (base64Image: string, prompt: string): Promise<st
         ]
       },
       config: {
+        responseModalities: ["IMAGE"],
+        tools: [{ googleSearch: {} }],
+        thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH },
         imageConfig: {
           imageSize: '2K'
         }
