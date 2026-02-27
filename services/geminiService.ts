@@ -1,5 +1,5 @@
 
-import { GoogleGenAI, ThinkingLevel } from "@google/genai";
+import { GoogleGenAI } from "@google/genai";
 import { CinematicSettings, Character, Location, Shot, ChatMessage } from "../types";
 import { ANAMORPHIC_LENS_PROMPTS } from "../constants";
 
@@ -821,8 +821,6 @@ export const generateAssetImage = async (
       contents: { parts: [{ text: prompt }] },
       config: {
         responseModalities: ["IMAGE"],
-        tools: [{ googleSearch: {} }],
-        thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH },
         imageConfig: {
           aspectRatio: '1:1',
           imageSize: '2K'
@@ -1118,8 +1116,6 @@ Maintain visual continuity: same color grade, lighting, environment details, and
       contents: { parts: parts },
       config: {
         responseModalities: ["IMAGE"],
-        tools: [{ googleSearch: {} }],
-        thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH },
         imageConfig: {
           aspectRatio: targetRatio,
           imageSize: targetImageSize
@@ -1157,8 +1153,6 @@ Maintain visual continuity: same color grade, lighting, environment details, and
         contents: { parts: [{ text: fallbackPrompt }] },
         config: {
           responseModalities: ["IMAGE"],
-          tools: [{ googleSearch: {} }],
-          thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH },
           imageConfig: {
             aspectRatio: targetRatio,
             imageSize: fallbackImageSize
@@ -1356,8 +1350,6 @@ export const alterShotImage = async (
       contents: { parts: parts },
       config: {
         responseModalities: ["IMAGE"],
-        tools: [{ googleSearch: {} }],
-        thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH },
         imageConfig: {
           aspectRatio: targetRatio,
           imageSize: mapResolutionToImageSize(settings.resolution || '1080p')
@@ -1453,8 +1445,6 @@ INSTRUCTIONS:
       },
       config: {
         responseModalities: ["IMAGE"],
-        tools: [{ googleSearch: {} }],
-        thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH },
         imageConfig: {
           aspectRatio: '1:1',
           imageSize: '2K'
@@ -1519,8 +1509,6 @@ CRITICAL RULES:
       },
       config: {
         responseModalities: ["IMAGE"],
-        tools: [{ googleSearch: {} }],
-        thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH },
         imageConfig: {
           aspectRatio: targetRatio,
           imageSize: '4K'
@@ -1602,8 +1590,6 @@ CRITICAL RULES:
         contents: { parts },
         config: {
           responseModalities: ["IMAGE"],
-          tools: [{ googleSearch: {} }],
-          thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH },
           imageConfig: {
             aspectRatio: '16:9',
             imageSize: '2K'
@@ -1687,8 +1673,6 @@ CRITICAL RULES:
         contents: { parts },
         config: {
           responseModalities: ["IMAGE"],
-          tools: [{ googleSearch: {} }],
-          thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH },
           imageConfig: {
             aspectRatio: '3:4',
             imageSize: '2K'
@@ -1778,8 +1762,6 @@ RULES:
       contents: { parts },
       config: {
         responseModalities: ["IMAGE"],
-        tools: [{ googleSearch: {} }],
-        thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH },
         imageConfig: {
           aspectRatio: targetRatio,
           imageSize: '2K'
@@ -1823,8 +1805,6 @@ export const editImage = async (base64Image: string, prompt: string): Promise<st
       },
       config: {
         responseModalities: ["IMAGE"],
-        tools: [{ googleSearch: {} }],
-        thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH },
         imageConfig: {
           imageSize: '2K'
         }
