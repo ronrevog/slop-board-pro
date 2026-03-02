@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Project, Shot, Scene, Character, Location, CinematicSettings } from '../../types';
 import { Bot, X, Send, Loader2, ChevronDown, ChevronUp, Sparkles, Trash2 } from 'lucide-react';
+import { GoogleGenAI } from '@google/genai';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -29,22 +30,19 @@ interface AIAgentProps {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Gemini-powered agent call
+// Gemini-powered agent call (gemini-3.1-flash-image-preview via @google/genai)
 // ─────────────────────────────────────────────────────────────────────────────
+
+const getAgentAI = () => {
+  const key = process.env.API_KEY || process.env.GEMINI_API_KEY || localStorage.getItem('gemini_api_key') || '';
+  return new GoogleGenAI({ apiKey: key });
+};
 
 async function callAgent(
   userMessage: string,
   project: Project,
   history: AgentMessage[]
 ): Promise<{ reply: string; actions: AgentAction[] }> {
-  const apiKey = localStorage.getItem('gemini_api_key') || '';
-  if (!apiKey) {
-    return {
-      reply: "No Gemini API key found. Please add your key in Settings.",
-      actions: [],
-    };
-  }
-
   const projectSummary = {
     title: project.title,
     scenes: project.scenes?.map(s => ({
@@ -58,7 +56,12 @@ async function callAgent(
     settings: project.settings,
   };
 
-  const systemPrompt = `You are SLOPBOT, an AI agent embedded inside Slop Board — a cinematic storyboarding and pre-production app.
+  const historyContext = history
+    .slice(-8)
+    .map(m => `${m.role === 'user' ? 'User' : 'SLOPBOT'}: ${m.text}`)
+    .join('\n');
+
+  const prompt = `You are SLOPBOT, an AI agent embedded inside Slop Board — a cinematic storyboarding and pre-production app.
 You have FULL control over the project. You can create, edit, and delete anything.
 
 Current project state:
@@ -91,30 +94,26 @@ Rules:
 2. When creating multiple shots, include them all in a single actions array.
 3. Use the scene IDs from the project state when referencing scenes.
 4. Be creative and cinematic in your descriptions.
-5. Keep your conversational reply concise (2-4 sentences).`;
+5. Keep your conversational reply concise (2-4 sentences).
 
-  const historyContext = history
-    .slice(-8)
-    .map(m => `${m.role === 'user' ? 'User' : 'SLOPBOT'}: ${m.text}`)
-    .join('\n');
+Conversation history:
+${historyContext}
 
-  const fullPrompt = `${systemPrompt}\n\nConversation history:\n${historyContext}\n\nUser: ${userMessage}\nSLOPBOT:`;
+User: ${userMessage}
+SLOPBOT:`;
 
   try {
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: fullPrompt }] }],
-          generationConfig: { temperature: 0.75, maxOutputTokens: 2000 },
-        }),
-      }
-    );
+    const ai = getAgentAI();
+    const response = await ai.models.generateContent({
+      model: 'gemini-3.1-flash-image-preview',
+      contents: prompt,
+      config: {
+        temperature: 0.75,
+        maxOutputTokens: 2048,
+      },
+    });
 
-    const data = await response.json();
-    const rawText: string = data?.candidates?.[0]?.content?.parts?.[0]?.text ?? 'Sorry, I could not process that.';
+    const rawText: string = response.text ?? 'Sorry, I could not process that.';
 
     const actionsMatch = rawText.match(/```actions\s*([\s\S]*?)```/);
     let actions: AgentAction[] = [];
@@ -131,8 +130,8 @@ Rules:
 
     return { reply, actions };
   } catch (err) {
-    console.error('Agent API error:', err);
-    return { reply: 'Error contacting Gemini. Check your API key and network connection.', actions: [] };
+    console.error('SLOPBOT error:', err);
+    return { reply: `Error: ${err instanceof Error ? err.message : 'Unknown error contacting Gemini.'}`, actions: [] };
   }
 }
 
