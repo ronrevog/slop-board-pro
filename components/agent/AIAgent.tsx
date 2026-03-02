@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Project, Shot, Scene, Character, Location, CinematicSettings } from '../../types';
-import { Bot, X, Send, Loader2, ChevronDown, ChevronUp, Sparkles, Trash2, AlertCircle, Image, Film, Zap } from 'lucide-react';
+import { Bot, X, Send, Loader2, ChevronDown, ChevronUp, Trash2, AlertCircle, Undo2, Redo2 } from 'lucide-react';
 import { GoogleGenAI } from '@google/genai';
 import { generateAssetImage, generateShotImage, generateShotVideo } from '../../services/geminiService';
 import { generateWanVideo } from '../../services/falService';
@@ -16,7 +16,7 @@ export interface AgentMessage {
   timestamp: number;
   actions?: AgentAction[];
   error?: boolean;
-  generating?: boolean; // shows spinner while async actions run
+  generating?: boolean;
 }
 
 export interface AgentAction {
@@ -31,6 +31,21 @@ interface AIAgentProps {
   onNavigate?: (tab: string) => void;
   onClose?: () => void;
   isOpen: boolean;
+  // Timeline control callbacks
+  onInsertClips?: (shotIds: { sceneId: string; shotId: string }[], trackId?: string) => void;
+  onRippleDelete?: (clipId: string) => void;
+  onClearTimeline?: () => void;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Undo/Redo History
+// ─────────────────────────────────────────────────────────────────────────────
+
+const MAX_HISTORY = 30;
+
+interface HistoryEntry {
+  project: Project;
+  description: string;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -47,7 +62,7 @@ function getGeminiKey(): string {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Call Gemini for planning/reasoning (text only)
+// Call Gemini for planning/reasoning
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function callAgent(
@@ -70,6 +85,8 @@ async function callAgent(
     scenes: project.scenes?.map(s => ({
       id: s.id,
       name: s.name,
+      description: s.description,
+      scriptContent: s.scriptContent?.substring(0, 500) || '',
       shotCount: s.shots?.length ?? 0,
       shots: s.shots?.map(sh => ({
         id: sh.id,
@@ -78,11 +95,13 @@ async function callAgent(
         shotType: sh.shotType,
         cameraMove: sh.cameraMove,
         action: sh.action,
+        dialogue: sh.dialogueLines?.map(d => d.text).join(' | ') || '',
         hasImage: !!sh.imageUrl,
         hasVideo: !!sh.videoUrl,
         videoPrompt: sh.videoPrompt,
         characters: sh.characters,
         locationId: sh.locationId,
+        notes: sh.notes,
       })),
     })),
     characters: project.characters?.map(c => ({
@@ -92,6 +111,7 @@ async function callAgent(
       age: c.age,
       occupation: c.occupation,
       wardrobe: c.wardrobe,
+      physicalFeatures: c.physicalFeatures,
       hasImage: !!c.imageUrl,
     })),
     locations: project.locations?.map(l => ({
@@ -100,12 +120,13 @@ async function callAgent(
       description: l.description,
       timeOfDay: l.timeOfDay,
       atmosphere: l.atmosphere,
+      weather: l.weather,
       hasImage: !!l.imageUrl,
     })),
   };
 
   const historyContext = history
-    .slice(-10)
+    .slice(-12)
     .map(m => `${m.role === 'user' ? 'User' : 'SLOPBOT'}: ${m.text}`)
     .join('\n');
 
@@ -116,7 +137,10 @@ You have FULL AUTONOMOUS CONTROL over the entire app. You can:
 - Generate storyboard frame images for any shot using Gemini image generation
 - Generate character portrait/reference images
 - Generate location/environment images
-- Generate videos for shots using Veo (image-to-video) or Wan (fal.ai)
+- Generate videos for shots using Veo (image-to-video)
+- Batch-generate images or videos for all shots in a scene or the entire project
+- Read and analyze the script content to auto-create scenes and shots
+- Control the timeline: insert clips, clear the timeline, arrange shots in order
 - Set video prompts for shots
 - Update all cinematic settings (cinematographer, film stock, lens, lighting, aspect ratio)
 - Navigate to any section of the app
@@ -140,7 +164,7 @@ AVAILABLE ACTIONS AND THEIR EXACT PAYLOADS:
 - RENAME_PROJECT: { "title": string }
 
 ── Scenes ───────────────────────────────────────────────────────────
-- ADD_SCENE: { "name": string }
+- ADD_SCENE: { "name": string, "description"?: string }
 - DELETE_SCENE: { "sceneId": string }
 - RENAME_SCENE: { "sceneId": string, "name": string }
 
@@ -151,41 +175,35 @@ AVAILABLE ACTIONS AND THEIR EXACT PAYLOADS:
     "action": string,
     "shotType": "Extreme Wide"|"Wide"|"Medium"|"Close Up"|"Extreme Close Up"|"Insert"|"High Angle"|"Low Angle"|"Dutch Angle (45°)"|"Overhead"|"Over the Shoulder",
     "cameraMove": "Static"|"Dolly In"|"Dolly Out"|"Pan"|"Tilt"|"Handheld"|"Tracking"|"Crane"|"Arc"|"Zoom In"|"Zoom Out"|"Whip Pan",
-    "characterIds"?: string[],   // optional: IDs of characters to include
-    "locationId"?: string        // optional: ID of location for this shot
+    "characterIds"?: string[],
+    "locationId"?: string,
+    "notes"?: string
   }
 - DELETE_SHOT: { "sceneId": string, "shotId": string }
 - UPDATE_SHOT: { "sceneId": string, "shotId": string, "description"?: string, "action"?: string, "shotType"?: string, "cameraMove"?: string, "notes"?: string, "videoPrompt"?: string }
 
-── Image Generation (ASYNC — triggers real AI image generation) ──────
-- GENERATE_SHOT_IMAGE: {
-    "sceneId": string,
-    "shotId": string
-    // Generates a cinematic storyboard frame for this shot using Gemini image gen
-    // The shot must already exist with a description
-  }
-- GENERATE_CHARACTER_IMAGE: {
-    "characterId": string
-    // Generates a character portrait/reference image using Gemini image gen
-  }
-- GENERATE_LOCATION_IMAGE: {
-    "locationId": string
-    // Generates a cinematic environment image for this location using Gemini image gen
-  }
+── Image Generation (ASYNC) ─────────────────────────────────────────
+- GENERATE_SHOT_IMAGE: { "sceneId": string, "shotId": string }
+- GENERATE_CHARACTER_IMAGE: { "characterId": string }
+- GENERATE_LOCATION_IMAGE: { "locationId": string }
 
-── Video Generation (ASYNC — triggers real video generation) ─────────
+── Batch Generation (ASYNC) ─────────────────────────────────────────
+- GENERATE_ALL_SHOT_IMAGES: { "sceneId"?: string }
+  // If sceneId provided, generates images for all shots in that scene.
+  // If omitted, generates for ALL shots in ALL scenes that don't have images yet.
+
+- GENERATE_ALL_VIDEOS: { "sceneId"?: string, "model": "fast"|"quality" }
+  // Generates videos for all shots that have images but no videos yet.
+  // If sceneId provided, only that scene. Otherwise all scenes.
+
+── Video Generation (ASYNC) ─────────────────────────────────────────
 - GENERATE_SHOT_VIDEO: {
     "sceneId": string,
     "shotId": string,
-    "model": "fast"|"quality",   // "fast" = veo-3.1-fast, "quality" = veo-3.1
-    "prompt": string             // Motion/action prompt for the video
-    // The shot MUST have an image (hasImage: true) before generating video
-  }
-- SET_VIDEO_PROMPT: {
-    "sceneId": string,
-    "shotId": string,
+    "model": "fast"|"quality",
     "prompt": string
   }
+- SET_VIDEO_PROMPT: { "sceneId": string, "shotId": string, "prompt": string }
 
 ── Characters ───────────────────────────────────────────────────────
 - ADD_CHARACTER: { "name": string, "description": string, "age"?: string, "occupation"?: string, "wardrobe"?: string, "physicalFeatures"?: string }
@@ -199,6 +217,21 @@ AVAILABLE ACTIONS AND THEIR EXACT PAYLOADS:
 
 ── Cinematic Settings ────────────────────────────────────────────────
 - UPDATE_SETTINGS: { "cinematographer"?: string, "filmStock"?: string, "lens"?: string, "lighting"?: string, "aspectRatio"?: "16:9"|"21:9"|"2.39:1"|"4:3"|"1:1"|"9:16", "colorGrade"?: string }
+
+── Timeline Control ──────────────────────────────────────────────────
+- INSERT_SCENE_TO_TIMELINE: { "sceneId": string, "trackId"?: string }
+  // Inserts all shots from a scene onto the timeline in order. Default track: "v1".
+
+- INSERT_ALL_TO_TIMELINE: { "trackId"?: string }
+  // Inserts ALL shots from ALL scenes onto the timeline in sequence.
+
+- CLEAR_TIMELINE: {}
+  // Removes all clips from the timeline.
+
+── Script Analysis ──────────────────────────────────────────────────
+- BREAKDOWN_SCRIPT: { "sceneId"?: string }
+  // Reads the script content and auto-generates scenes, characters, locations, and shots from it.
+  // If sceneId provided, only breaks down that scene's script. Otherwise uses the project-level script.
 
 ── Navigation ───────────────────────────────────────────────────────
 - NAVIGATE: { "tab": "script"|"characters"|"locations"|"board"|"video"|"motion"|"settings"|"timeline" }
@@ -218,6 +251,10 @@ RULES:
 10. You can chain actions: ADD_CHARACTER → GENERATE_CHARACTER_IMAGE in one response.
 11. When the user asks to "generate" or "create" something visual, always include the appropriate GENERATE_ action.
 12. For video generation, always write a cinematic motion prompt describing camera movement and action.
+13. For GENERATE_ALL_SHOT_IMAGES and GENERATE_ALL_VIDEOS: use these when the user asks to generate images/videos for "all shots", "everything", "the whole scene", etc.
+14. For INSERT_SCENE_TO_TIMELINE and INSERT_ALL_TO_TIMELINE: use these when the user asks to "put on timeline", "add to timeline", "arrange on timeline", etc.
+15. For BREAKDOWN_SCRIPT: use when the user asks to "read the script", "break down the script", "analyze the script", etc.
+16. The user can say "undo" to undo the last action — this is handled automatically, you don't need an action for it.
 
 CONVERSATION HISTORY:
 ${historyContext}
@@ -232,7 +269,7 @@ SLOPBOT:`;
       contents: systemPrompt,
       config: {
         temperature: 0.75,
-        maxOutputTokens: 2048,
+        maxOutputTokens: 4096,
       },
     });
 
@@ -268,11 +305,11 @@ SLOPBOT:`;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Apply synchronous actions to the project (returns updated project + async queue)
+// Apply synchronous actions to the project
 // ─────────────────────────────────────────────────────────────────────────────
 
 interface AsyncTask {
-  type: 'GENERATE_SHOT_IMAGE' | 'GENERATE_CHARACTER_IMAGE' | 'GENERATE_LOCATION_IMAGE' | 'GENERATE_SHOT_VIDEO';
+  type: string;
   description: string;
   payload: Record<string, unknown>;
 }
@@ -280,7 +317,9 @@ interface AsyncTask {
 function applyActions(
   project: Project,
   actions: AgentAction[],
-  onNavigate?: (tab: string) => void
+  onNavigate?: (tab: string) => void,
+  onInsertClips?: (shotIds: { sceneId: string; shotId: string }[], trackId?: string) => void,
+  onClearTimeline?: () => void
 ): { updated: Project; asyncTasks: AsyncTask[] } {
   let updated = { ...project };
   const asyncTasks: AsyncTask[] = [];
@@ -299,6 +338,7 @@ function applyActions(
         const newScene: Scene = {
           id: crypto.randomUUID(),
           name: (p?.name as string) || `Scene ${(updated.scenes?.length ?? 0) + 1}`,
+          description: (p?.description as string) || '',
           scriptContent: '',
           shots: [],
           order: updated.scenes?.length ?? 0,
@@ -342,6 +382,7 @@ function applyActions(
           characters: (p?.characterIds as string[]) || [],
           locationId: (p?.locationId as string) || updated.locations?.[0]?.id || '',
           videoPrompt: (p?.videoPrompt as string) || '',
+          notes: (p?.notes as string) || '',
           isGenerating: false,
           isEditing: false,
         };
@@ -364,7 +405,7 @@ function applyActions(
             ...updated,
             scenes: updated.scenes?.map(s => {
               if (s.id === p.sceneId) {
-                return { ...s, shots: s.shots.filter(sh => sh.id !== p.shotId) };
+                return { ...s, shots: s.shots.filter(sh => sh.id !== p.shotId).map((sh, i) => ({ ...sh, number: i + 1 })) };
               }
               return s;
             }) ?? [],
@@ -540,19 +581,108 @@ function applyActions(
         }
         break;
 
-      // ── Async image/video generation — queued for execution after state update ──
+      // ── Timeline Control ─────────────────────────────────────────────────
+      case 'INSERT_SCENE_TO_TIMELINE': {
+        if (onInsertClips && p?.sceneId) {
+          const scene = updated.scenes?.find(s => s.id === p.sceneId);
+          if (scene) {
+            const shotIds = scene.shots.map(sh => ({ sceneId: scene.id, shotId: sh.id }));
+            setTimeout(() => onInsertClips(shotIds, p.trackId as string | undefined), 200);
+          }
+        }
+        break;
+      }
+
+      case 'INSERT_ALL_TO_TIMELINE': {
+        if (onInsertClips) {
+          const allShotIds: { sceneId: string; shotId: string }[] = [];
+          for (const scene of updated.scenes ?? []) {
+            for (const shot of scene.shots) {
+              allShotIds.push({ sceneId: scene.id, shotId: shot.id });
+            }
+          }
+          if (allShotIds.length > 0) {
+            setTimeout(() => onInsertClips(allShotIds, p?.trackId as string | undefined), 200);
+          }
+        }
+        break;
+      }
+
+      case 'CLEAR_TIMELINE':
+        if (onClearTimeline) {
+          setTimeout(() => onClearTimeline(), 150);
+        }
+        break;
+
+      // ── Script Breakdown ─────────────────────────────────────────────────
+      case 'BREAKDOWN_SCRIPT': {
+        // This is handled as an async task since it needs AI processing
+        asyncTasks.push({
+          type: 'BREAKDOWN_SCRIPT',
+          description: action.description || 'Breaking down script into scenes and shots',
+          payload: p ?? {},
+        });
+        break;
+      }
+
+      // ── Async image/video generation — queued for execution ──────────────
       case 'GENERATE_SHOT_IMAGE':
       case 'GENERATE_CHARACTER_IMAGE':
       case 'GENERATE_LOCATION_IMAGE':
       case 'GENERATE_SHOT_VIDEO':
         if (p) {
           asyncTasks.push({
-            type: action.type as AsyncTask['type'],
+            type: action.type,
             description: action.description,
             payload: p,
           });
         }
         break;
+
+      // ── Batch Generation ─────────────────────────────────────────────────
+      case 'GENERATE_ALL_SHOT_IMAGES': {
+        const targetSceneId = p?.sceneId as string | undefined;
+        const scenes = targetSceneId
+          ? updated.scenes?.filter(s => s.id === targetSceneId)
+          : updated.scenes;
+        for (const scene of scenes ?? []) {
+          for (const shot of scene.shots) {
+            if (!shot.imageUrl) {
+              asyncTasks.push({
+                type: 'GENERATE_SHOT_IMAGE',
+                description: `Generate image for ${scene.name} · Shot ${shot.number}`,
+                payload: { sceneId: scene.id, shotId: shot.id },
+              });
+            }
+          }
+        }
+        break;
+      }
+
+      case 'GENERATE_ALL_VIDEOS': {
+        const targetSceneId2 = p?.sceneId as string | undefined;
+        const model = (p?.model as string) || 'fast';
+        const scenes2 = targetSceneId2
+          ? updated.scenes?.filter(s => s.id === targetSceneId2)
+          : updated.scenes;
+        for (const scene of scenes2 ?? []) {
+          for (const shot of scene.shots) {
+            if (shot.imageUrl && !shot.videoUrl) {
+              asyncTasks.push({
+                type: 'GENERATE_SHOT_VIDEO',
+                description: `Generate video for ${scene.name} · Shot ${shot.number}`,
+                payload: {
+                  sceneId: scene.id,
+                  shotId: shot.id,
+                  model,
+                  prompt: shot.videoPrompt || shot.description,
+                },
+              });
+            }
+          }
+        }
+        break;
+      }
 
       default:
         console.warn('SLOPBOT: unknown action type:', action.type);
@@ -590,7 +720,6 @@ async function executeAsyncTask(
         scene?.shots ?? []
       );
 
-      // Update project with the generated image
       const updatedProject: Project = {
         ...project,
         scenes: project.scenes?.map(s => {
@@ -673,7 +802,6 @@ async function executeAsyncTask(
       if (!shot) throw new Error(`Shot ${shotId} not found`);
       if (!shot.imageUrl) throw new Error(`Shot #${shot.number} needs an image before generating video. Generate the image first.`);
 
-      // Use Veo via geminiService
       const videoUrl = await generateShotVideo(shot, project.settings, model, prompt || shot.videoPrompt || shot.description);
 
       const updatedProject: Project = {
@@ -697,6 +825,134 @@ async function executeAsyncTask(
       return `Generated video for Shot #${shot.number}`;
     }
 
+    case 'BREAKDOWN_SCRIPT': {
+      // Use Gemini to analyze the script and create structured data
+      const apiKey = getGeminiKey();
+      if (!apiKey) throw new Error('No API key for script breakdown');
+
+      const sceneId = p.sceneId as string | undefined;
+      let scriptText = '';
+      if (sceneId) {
+        const scene = project.scenes?.find(s => s.id === sceneId);
+        scriptText = scene?.scriptContent || '';
+      } else {
+        scriptText = project.scriptContent || project.scenes?.map(s => `${s.name}:\n${s.scriptContent}`).join('\n\n') || '';
+      }
+
+      if (!scriptText.trim()) throw new Error('No script content found. Add script text in the Script tab first.');
+
+      const ai = new GoogleGenAI({ apiKey });
+      const breakdownPrompt = `Analyze this screenplay/script and extract structured data. Return ONLY a JSON object (no markdown, no code fences) with this exact structure:
+{
+  "scenes": [
+    {
+      "name": "Scene name",
+      "description": "Brief scene description",
+      "shots": [
+        {
+          "description": "Visual description of the shot",
+          "action": "What happens in this shot",
+          "shotType": "Wide|Medium|Close Up|etc",
+          "cameraMove": "Static|Dolly In|Pan|etc"
+        }
+      ]
+    }
+  ],
+  "characters": [
+    { "name": "Character Name", "description": "Brief description", "age": "age", "occupation": "role" }
+  ],
+  "locations": [
+    { "name": "Location Name", "description": "Description", "timeOfDay": "Day|Night|Dawn|etc", "atmosphere": "mood" }
+  ]
+}
+
+SCRIPT:
+${scriptText.substring(0, 8000)}`;
+
+      const response = await ai.models.generateContent({
+        model: 'gemini-3.1-flash-image-preview',
+        contents: breakdownPrompt,
+        config: { temperature: 0.3, maxOutputTokens: 4096 },
+      });
+
+      const responseText = response.text ?? '';
+      // Try to parse JSON from response
+      const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) throw new Error('Could not parse script breakdown response');
+
+      const breakdown = JSON.parse(jsonMatch[0]);
+      let updatedProject = { ...project };
+
+      // Add characters
+      if (breakdown.characters?.length) {
+        for (const c of breakdown.characters) {
+          const exists = updatedProject.characters?.some(ec => ec.name.toLowerCase() === c.name.toLowerCase());
+          if (!exists) {
+            const newChar: Character = {
+              id: crypto.randomUUID(),
+              name: c.name,
+              description: c.description || '',
+              age: c.age,
+              occupation: c.occupation,
+              isGenerating: false,
+              isEditing: false,
+            };
+            updatedProject = { ...updatedProject, characters: [...(updatedProject.characters ?? []), newChar] };
+          }
+        }
+      }
+
+      // Add locations
+      if (breakdown.locations?.length) {
+        for (const l of breakdown.locations) {
+          const exists = updatedProject.locations?.some(el => el.name.toLowerCase() === l.name.toLowerCase());
+          if (!exists) {
+            const newLoc: Location = {
+              id: crypto.randomUUID(),
+              name: l.name,
+              description: l.description || '',
+              timeOfDay: l.timeOfDay,
+              atmosphere: l.atmosphere,
+              isGenerating: false,
+              isEditing: false,
+            };
+            updatedProject = { ...updatedProject, locations: [...(updatedProject.locations ?? []), newLoc] };
+          }
+        }
+      }
+
+      // Add scenes and shots
+      if (breakdown.scenes?.length) {
+        for (const bs of breakdown.scenes) {
+          const newScene: Scene = {
+            id: crypto.randomUUID(),
+            name: bs.name || `Scene ${(updatedProject.scenes?.length ?? 0) + 1}`,
+            description: bs.description || '',
+            scriptContent: '',
+            shots: (bs.shots || []).map((sh: Record<string, string>, i: number) => ({
+              id: crypto.randomUUID(),
+              number: i + 1,
+              description: sh.description || '',
+              action: sh.action || '',
+              dialogueLines: [],
+              shotType: (sh.shotType as Shot['shotType']) || 'Medium',
+              cameraMove: (sh.cameraMove as Shot['cameraMove']) || 'Static',
+              characters: [],
+              locationId: '',
+              isGenerating: false,
+              isEditing: false,
+            })),
+            order: updatedProject.scenes?.length ?? 0,
+          };
+          updatedProject = { ...updatedProject, scenes: [...(updatedProject.scenes ?? []), newScene] };
+        }
+      }
+
+      onUpdateProject(updatedProject);
+      const stats = `${breakdown.scenes?.length ?? 0} scenes, ${breakdown.scenes?.reduce((a: number, s: { shots?: unknown[] }) => a + (s.shots?.length ?? 0), 0) ?? 0} shots, ${breakdown.characters?.length ?? 0} characters, ${breakdown.locations?.length ?? 0} locations`;
+      return `Script breakdown complete: ${stats}`;
+    }
+
     default:
       throw new Error(`Unknown async task type: ${task.type}`);
   }
@@ -709,10 +965,11 @@ async function executeAsyncTask(
 const QUICK_ACTIONS = [
   { label: 'Create 3 shots + generate images', icon: '🎬' },
   { label: 'Generate images for all shots', icon: '🖼️' },
+  { label: 'Generate videos for all shots', icon: '📹' },
   { label: 'Add a character and generate portrait', icon: '🎭' },
   { label: 'Add a location and generate image', icon: '🌆' },
-  { label: 'Generate video for Shot 1', icon: '🎥' },
-  { label: 'Go to timeline', icon: '⏱️' },
+  { label: 'Break down the script into scenes and shots', icon: '📜' },
+  { label: 'Put all shots on the timeline', icon: '⏱️' },
   { label: 'What shots do I have?', icon: '📋' },
   { label: 'Change cinematographer to Roger Deakins style', icon: '🎞️' },
 ];
@@ -723,12 +980,15 @@ export const AIAgent: React.FC<AIAgentProps> = ({
   onNavigate,
   onClose,
   isOpen,
+  onInsertClips,
+  onRippleDelete,
+  onClearTimeline,
 }) => {
   const [messages, setMessages] = useState<AgentMessage[]>([
     {
       id: 'welcome',
       role: 'agent',
-      text: `Hey! I'm **SLOPBOT** — your AI director with full control over this project.\n\nI can create scenes, shots, characters, and locations — and I can **generate storyboard images**, **character portraits**, **location visuals**, and **videos** for any shot. I can also navigate anywhere in the app.\n\nWhat would you like to create?`,
+      text: `Hey! I'm **SLOPBOT** — your AI director with full control over this project.\n\nI can create scenes, shots, characters, and locations — **generate storyboard images**, **character portraits**, **location visuals**, and **videos**. I can also **break down scripts**, **batch-generate everything**, and **control the timeline**.\n\nSay **"undo"** anytime to reverse my last action.\n\nWhat would you like to create?`,
       timestamp: Date.now(),
     },
   ]);
@@ -739,6 +999,10 @@ export const AIAgent: React.FC<AIAgentProps> = ({
   const [generatingTasks, setGeneratingTasks] = useState<string[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  // Undo/Redo history
+  const [undoStack, setUndoStack] = useState<HistoryEntry[]>([]);
+  const [redoStack, setRedoStack] = useState<HistoryEntry[]>([]);
 
   // Keep a ref to the latest project so async tasks always use fresh state
   const projectRef = useRef(project);
@@ -761,9 +1025,78 @@ export const AIAgent: React.FC<AIAgentProps> = ({
     }
   }, [isOpen, isMinimized]);
 
+  // Save to undo stack before applying actions
+  const pushUndo = useCallback((description: string) => {
+    setUndoStack(prev => {
+      const next = [...prev, { project: JSON.parse(JSON.stringify(projectRef.current)), description }];
+      if (next.length > MAX_HISTORY) next.shift();
+      return next;
+    });
+    setRedoStack([]);
+  }, []);
+
+  const handleUndo = useCallback(() => {
+    if (undoStack.length === 0) {
+      setMessages(prev => [...prev, {
+        id: crypto.randomUUID(),
+        role: 'agent',
+        text: 'Nothing to undo!',
+        timestamp: Date.now(),
+      }]);
+      return;
+    }
+    const last = undoStack[undoStack.length - 1];
+    setRedoStack(prev => [...prev, { project: JSON.parse(JSON.stringify(projectRef.current)), description: last.description }]);
+    setUndoStack(prev => prev.slice(0, -1));
+    onUpdateProject(last.project);
+    setMessages(prev => [...prev, {
+      id: crypto.randomUUID(),
+      role: 'agent',
+      text: `Undone: **${last.description}**`,
+      timestamp: Date.now(),
+    }]);
+  }, [undoStack, onUpdateProject]);
+
+  const handleRedo = useCallback(() => {
+    if (redoStack.length === 0) {
+      setMessages(prev => [...prev, {
+        id: crypto.randomUUID(),
+        role: 'agent',
+        text: 'Nothing to redo!',
+        timestamp: Date.now(),
+      }]);
+      return;
+    }
+    const last = redoStack[redoStack.length - 1];
+    setUndoStack(prev => [...prev, { project: JSON.parse(JSON.stringify(projectRef.current)), description: last.description }]);
+    setRedoStack(prev => prev.slice(0, -1));
+    onUpdateProject(last.project);
+    setMessages(prev => [...prev, {
+      id: crypto.randomUUID(),
+      role: 'agent',
+      text: `Redone: **${last.description}**`,
+      timestamp: Date.now(),
+    }]);
+  }, [redoStack, onUpdateProject]);
+
   const handleSend = useCallback(async (overrideText?: string) => {
     const text = (overrideText ?? input).trim();
     if (!text || isLoading) return;
+
+    // Handle undo/redo commands locally
+    const lower = text.toLowerCase().trim();
+    if (lower === 'undo' || lower === 'undo that') {
+      setInput('');
+      setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'user', text, timestamp: Date.now() }]);
+      handleUndo();
+      return;
+    }
+    if (lower === 'redo') {
+      setInput('');
+      setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'user', text, timestamp: Date.now() }]);
+      handleRedo();
+      return;
+    }
 
     const userMsg: AgentMessage = {
       id: crypto.randomUUID(),
@@ -784,7 +1117,11 @@ export const AIAgent: React.FC<AIAgentProps> = ({
       let asyncTasks: AsyncTask[] = [];
 
       if (actions.length > 0) {
-        const result = applyActions(project, actions, onNavigate);
+        // Save undo state before applying
+        const actionSummary = actions.map(a => a.description || a.type).join(', ');
+        pushUndo(actionSummary);
+
+        const result = applyActions(project, actions, onNavigate, onInsertClips, onClearTimeline);
         currentProject = result.updated;
         asyncTasks = result.asyncTasks;
         onUpdateProject(currentProject);
@@ -802,14 +1139,18 @@ export const AIAgent: React.FC<AIAgentProps> = ({
 
       setMessages(prev => [...prev, agentMsg]);
 
-      // Execute async generation tasks sequentially
+      // Execute async generation tasks
       if (asyncTasks.length > 0) {
         const taskLabels = asyncTasks.map(t => t.description);
         setGeneratingTasks(taskLabels);
 
         const completedDescriptions: string[] = [];
+        let completedCount = 0;
 
-        for (const task of asyncTasks) {
+        // Run async tasks with concurrency limit of 3
+        const concurrencyLimit = 3;
+        const taskQueue = [...asyncTasks];
+        const runTask = async (task: AsyncTask) => {
           try {
             const result = await executeAsyncTask(task, projectRef.current, (updated) => {
               projectRef.current = updated;
@@ -820,7 +1161,25 @@ export const AIAgent: React.FC<AIAgentProps> = ({
             const errMsg = err instanceof Error ? err.message : String(err);
             completedDescriptions.push(`❌ Failed: ${errMsg}`);
           }
+          completedCount++;
+          setGeneratingTasks(prev => prev.filter(l => l !== task.description));
+        };
+
+        // Process tasks with concurrency
+        const running: Promise<void>[] = [];
+        for (const task of taskQueue) {
+          const p = runTask(task);
+          running.push(p);
+          if (running.length >= concurrencyLimit) {
+            await Promise.race(running);
+            // Remove completed promises
+            for (let i = running.length - 1; i >= 0; i--) {
+              const settled = await Promise.race([running[i].then(() => true), Promise.resolve(false)]);
+              if (settled) running.splice(i, 1);
+            }
+          }
         }
+        await Promise.all(running);
 
         setGeneratingTasks([]);
 
@@ -851,7 +1210,7 @@ export const AIAgent: React.FC<AIAgentProps> = ({
     } finally {
       setIsLoading(false);
     }
-  }, [input, isLoading, project, messages, onUpdateProject, onNavigate]);
+  }, [input, isLoading, project, messages, onUpdateProject, onNavigate, onInsertClips, onClearTimeline, pushUndo, handleUndo, handleRedo]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -894,8 +1253,8 @@ export const AIAgent: React.FC<AIAgentProps> = ({
     <div
       className="fixed bottom-4 right-4 z-50 flex flex-col bg-neutral-900 border border-neutral-700 rounded-2xl shadow-2xl transition-all duration-300 overflow-hidden"
       style={{
-        width: '24rem',
-        height: isMinimized ? '3.5rem' : '42rem',
+        width: '26rem',
+        height: isMinimized ? '3.5rem' : '44rem',
         maxHeight: 'calc(100vh - 5rem)',
       }}
     >
@@ -914,10 +1273,28 @@ export const AIAgent: React.FC<AIAgentProps> = ({
           </div>
           <div className={`w-2 h-2 rounded-full ml-1 ${apiKeyMissing ? 'bg-yellow-500' : generatingTasks.length > 0 ? 'bg-blue-400 animate-pulse' : 'bg-green-500 animate-pulse'}`} />
           {generatingTasks.length > 0 && (
-            <span className="text-blue-400 text-xs ml-1">Generating...</span>
+            <span className="text-blue-400 text-xs ml-1">Generating ({generatingTasks.length})...</span>
           )}
         </div>
         <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
+          {/* Undo/Redo buttons */}
+          <button
+            onClick={handleUndo}
+            disabled={undoStack.length === 0}
+            className="p-1.5 rounded-lg text-neutral-500 hover:text-white hover:bg-neutral-700 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+            title={undoStack.length > 0 ? `Undo: ${undoStack[undoStack.length - 1].description}` : 'Nothing to undo'}
+          >
+            <Undo2 size={13} />
+          </button>
+          <button
+            onClick={handleRedo}
+            disabled={redoStack.length === 0}
+            className="p-1.5 rounded-lg text-neutral-500 hover:text-white hover:bg-neutral-700 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+            title={redoStack.length > 0 ? `Redo: ${redoStack[redoStack.length - 1].description}` : 'Nothing to redo'}
+          >
+            <Redo2 size={13} />
+          </button>
+          <div className="w-px h-4 bg-neutral-700 mx-0.5" />
           <button
             onClick={clearHistory}
             className="p-1.5 rounded-lg text-neutral-500 hover:text-white hover:bg-neutral-700 transition-colors"
@@ -950,11 +1327,11 @@ export const AIAgent: React.FC<AIAgentProps> = ({
 
           {/* Active generation tasks */}
           {generatingTasks.length > 0 && (
-            <div className="px-3 py-2 bg-blue-900/20 border-b border-blue-800/30 flex-shrink-0">
+            <div className="px-3 py-2 bg-blue-900/20 border-b border-blue-800/30 flex-shrink-0 max-h-20 overflow-y-auto">
               {generatingTasks.map((task, i) => (
                 <div key={i} className="flex items-center gap-2 text-xs text-blue-300">
                   <Loader2 size={10} className="animate-spin flex-shrink-0" />
-                  <span>{task}</span>
+                  <span className="truncate">{task}</span>
                 </div>
               ))}
             </div>
@@ -985,14 +1362,21 @@ export const AIAgent: React.FC<AIAgentProps> = ({
                     <div className="mt-2 space-y-1">
                       {msg.actions
                         .filter(a => !['NAVIGATE'].includes(a.type))
+                        .slice(0, 10)
                         .map((a, i) => (
                           <div key={i} className="flex items-center gap-1.5">
                             <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
-                              a.type.startsWith('GENERATE') ? 'bg-blue-400' : 'bg-green-400'
+                              a.type.startsWith('GENERATE') ? 'bg-blue-400'
+                              : a.type.startsWith('INSERT') || a.type === 'CLEAR_TIMELINE' ? 'bg-purple-400'
+                              : a.type === 'BREAKDOWN_SCRIPT' ? 'bg-yellow-400'
+                              : 'bg-green-400'
                             }`} />
                             <span className="text-xs text-neutral-400">{a.description}</span>
                           </div>
                         ))}
+                      {msg.actions.length > 10 && (
+                        <span className="text-xs text-neutral-500">+ {msg.actions.length - 10} more actions</span>
+                      )}
                     </div>
                   )}
 
@@ -1063,7 +1447,7 @@ export const AIAgent: React.FC<AIAgentProps> = ({
                 {isLoading ? <Loader2 size={14} className="text-white animate-spin" /> : <Send size={14} className="text-white" />}
               </button>
             </div>
-            <p className="text-neutral-600 text-xs mt-1 text-center">Enter to send · Shift+Enter for newline</p>
+            <p className="text-neutral-600 text-xs mt-1 text-center">Enter to send · Shift+Enter for newline · "undo" / "redo"</p>
           </div>
         </>
       )}

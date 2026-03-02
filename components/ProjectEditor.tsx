@@ -2492,6 +2492,8 @@ TIP: Select (highlight) a portion of text and click 'Analyze Scene' to analyze o
           onNavigate={(tab) => setActiveTab(tab as any)}
           onClose={() => setAgentOpen(false)}
           isOpen={agentOpen}
+          onInsertClips={() => { setActiveTab('timeline'); }}
+          onClearTimeline={() => { setActiveTab('timeline'); }}
         />
 
         {expandedShotId && (

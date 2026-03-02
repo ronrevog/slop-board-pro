@@ -5,28 +5,28 @@ import {
   Scissors, Lock, Unlock, Eye, EyeOff, Trash2,
   Volume2, VolumeX, Film, Music, Layers, RefreshCw,
   FastForward, Rewind, PlusCircle, ChevronDown, ChevronRight,
-  Monitor, Clapperboard, ListVideo
+  Monitor, Clapperboard, ListVideo, Download, GripVertical
 } from 'lucide-react';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
 // ─────────────────────────────────────────────────────────────────────────────
 
-interface TimelineClip {
+export interface TimelineClip {
   id: string;
   shotId: string;
   sceneId: string;
   trackId: string;
   startFrame: number;
-  durationFrames: number;   // actual duration in frames (from video metadata or default)
+  durationFrames: number;
   label: string;
   color: string;
   imageUrl?: string;
   videoUrl?: string;
   locked: boolean;
   muted: boolean;
-  inPoint: number;          // trim in (frames from clip start)
-  outPoint: number;         // trim out (frames from clip start, = durationFrames means no trim)
+  inPoint: number;
+  outPoint: number;
 }
 
 interface TimelineTrack {
@@ -40,7 +40,6 @@ interface TimelineTrack {
   height: number;
 }
 
-// Source bin item — all shots available to drag onto timeline
 interface SourceItem {
   shotId: string;
   sceneId: string;
@@ -49,13 +48,19 @@ interface SourceItem {
   description: string;
   imageUrl?: string;
   videoUrl?: string;
-  durationFrames: number;   // resolved from video metadata or default
+  durationFrames: number;
   color: string;
 }
 
-interface TimelineEditorProps {
+export interface TimelineEditorProps {
   project: Project;
   onUpdateProject: (project: Project) => void;
+}
+
+// Exposed handle for SLOPBOT control
+export interface TimelineHandle {
+  insertClips: (shotIds: { sceneId: string; shotId: string }[], trackId?: string) => void;
+  clearTimeline: () => void;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -67,6 +72,7 @@ const DEFAULT_SHOT_DURATION_SEC = 5;
 const DEFAULT_SHOT_DURATION = DEFAULT_SHOT_DURATION_SEC * FPS;
 const TRACK_HEADER_WIDTH = 180;
 const RULER_HEIGHT = 28;
+const TRIM_HANDLE_WIDTH = 8;
 const SHOT_COLORS = [
   '#dc2626', '#ea580c', '#ca8a04', '#16a34a',
   '#0891b2', '#7c3aed', '#db2777', '#475569',
@@ -89,7 +95,6 @@ function secondsToFrames(sec: number): number {
   return Math.round(sec * FPS);
 }
 
-/** Load actual video duration from a URL. Returns frames. */
 async function loadVideoDuration(url: string): Promise<number> {
   return new Promise(resolve => {
     const vid = document.createElement('video');
@@ -128,7 +133,6 @@ const SourceMonitor: React.FC<SourceMonitorProps> = ({ items, onSendToTimeline, 
   const videoRef = useRef<HTMLVideoElement>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Group items by scene
   const byScene = useMemo(() => {
     const map = new Map<string, { sceneName: string; items: SourceItem[] }>();
     for (const item of items) {
@@ -138,12 +142,10 @@ const SourceMonitor: React.FC<SourceMonitorProps> = ({ items, onSendToTimeline, 
     return map;
   }, [items]);
 
-  // Auto-expand all scenes
   useEffect(() => {
     setExpandedScenes(new Set(Array.from(byScene.keys())));
   }, [byScene]);
 
-  // Playback ticker for image-only items
   useEffect(() => {
     if (isPlaying && selected && !selected.videoUrl) {
       intervalRef.current = setInterval(() => {
@@ -172,19 +174,15 @@ const SourceMonitor: React.FC<SourceMonitorProps> = ({ items, onSendToTimeline, 
   const togglePlay = () => {
     if (!selected) return;
     if (selected.videoUrl && videoRef.current) {
-      if (isPlaying) { videoRef.current.pause(); }
-      else { videoRef.current.play().catch(() => {}); }
+      if (isPlaying) videoRef.current.pause();
+      else videoRef.current.play().catch(() => {});
     }
     setIsPlaying(v => !v);
   };
 
-  const handleVideoTimeUpdate = () => {
-    if (videoRef.current) setCurrentTime(videoRef.current.currentTime);
-  };
+  const handleVideoTimeUpdate = () => { if (videoRef.current) setCurrentTime(videoRef.current.currentTime); };
   const handleVideoEnded = () => setIsPlaying(false);
-  const handleVideoLoadedMetadata = () => {
-    if (videoRef.current) setDuration(videoRef.current.duration);
-  };
+  const handleVideoLoadedMetadata = () => { if (videoRef.current) setDuration(videoRef.current.duration); };
 
   const sendToTimeline = () => {
     if (!selected) return;
@@ -195,7 +193,6 @@ const SourceMonitor: React.FC<SourceMonitorProps> = ({ items, onSendToTimeline, 
 
   return (
     <div className="flex flex-col h-full bg-neutral-950 border-r border-neutral-800">
-      {/* Header */}
       <div className="flex items-center justify-between px-3 py-1.5 bg-neutral-900 border-b border-neutral-800 flex-shrink-0">
         <div className="flex items-center gap-1.5">
           <Clapperboard size={13} className="text-red-500" />
@@ -204,7 +201,6 @@ const SourceMonitor: React.FC<SourceMonitorProps> = ({ items, onSendToTimeline, 
         <span className="text-xs text-neutral-600">{items.length} clips</span>
       </div>
 
-      {/* Preview screen */}
       <div className="relative bg-black flex items-center justify-center flex-shrink-0" style={{ height: 160 }}>
         {selected?.videoUrl ? (
           <video
@@ -224,8 +220,6 @@ const SourceMonitor: React.FC<SourceMonitorProps> = ({ items, onSendToTimeline, 
             <span className="text-xs">Select a clip to preview</span>
           </div>
         )}
-
-        {/* Timecode overlay */}
         {selected && (
           <div className="absolute bottom-1.5 left-1/2 -translate-x-1/2 bg-black/70 px-2 py-0.5 rounded font-mono text-xs text-white tracking-widest">
             {framesToTimecode(Math.round(currentTime * FPS))} / {framesToTimecode(Math.round(duration * FPS))}
@@ -233,7 +227,6 @@ const SourceMonitor: React.FC<SourceMonitorProps> = ({ items, onSendToTimeline, 
         )}
       </div>
 
-      {/* Progress bar */}
       <div className="h-1 bg-neutral-800 flex-shrink-0 cursor-pointer" onClick={e => {
         if (!selected || !duration) return;
         const rect = e.currentTarget.getBoundingClientRect();
@@ -244,7 +237,6 @@ const SourceMonitor: React.FC<SourceMonitorProps> = ({ items, onSendToTimeline, 
         <div className="h-full bg-red-600 transition-none" style={{ width: `${progress * 100}%` }} />
       </div>
 
-      {/* Source transport controls */}
       <div className="flex items-center justify-center gap-1 px-2 py-1.5 bg-neutral-900 border-b border-neutral-800 flex-shrink-0">
         <button onClick={() => { setCurrentTime(0); if (videoRef.current) videoRef.current.currentTime = 0; }} className="p-1 hover:bg-neutral-700 rounded">
           <SkipBack size={13} className="text-neutral-400" />
@@ -256,7 +248,6 @@ const SourceMonitor: React.FC<SourceMonitorProps> = ({ items, onSendToTimeline, 
           <SkipForward size={13} className="text-neutral-400" />
         </button>
 
-        {/* Send to timeline */}
         <div className="flex items-center gap-1 ml-2 border-l border-neutral-700 pl-2">
           <select
             value={targetTrack}
@@ -278,7 +269,6 @@ const SourceMonitor: React.FC<SourceMonitorProps> = ({ items, onSendToTimeline, 
         </div>
       </div>
 
-      {/* Clip browser */}
       <div className="flex-1 overflow-y-auto">
         {items.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-neutral-700 p-4 text-center">
@@ -289,7 +279,6 @@ const SourceMonitor: React.FC<SourceMonitorProps> = ({ items, onSendToTimeline, 
         ) : (
           Array.from(byScene.entries()).map(([sceneId, { sceneName, items: sceneItems }]) => (
             <div key={sceneId}>
-              {/* Scene group header */}
               <button
                 className="w-full flex items-center gap-1.5 px-3 py-1.5 bg-neutral-900 hover:bg-neutral-800 border-b border-neutral-800 text-left"
                 onClick={() => setExpandedScenes(prev => {
@@ -302,8 +291,6 @@ const SourceMonitor: React.FC<SourceMonitorProps> = ({ items, onSendToTimeline, 
                 <span className="text-xs text-neutral-400 font-medium">{sceneName}</span>
                 <span className="text-xs text-neutral-600 ml-auto">{sceneItems.length}</span>
               </button>
-
-              {/* Shot items */}
               {expandedScenes.has(sceneId) && sceneItems.map(item => (
                 <div
                   key={item.shotId}
@@ -314,24 +301,17 @@ const SourceMonitor: React.FC<SourceMonitorProps> = ({ items, onSendToTimeline, 
                   onDoubleClick={() => { selectItem(item); onSendToTimeline(item, targetTrack); }}
                   title="Click to preview · Double-click to insert"
                 >
-                  {/* Thumbnail */}
                   <div className="w-12 h-8 rounded overflow-hidden flex-shrink-0 bg-neutral-800 relative">
                     {item.imageUrl
                       ? <img src={item.imageUrl} alt="" className="w-full h-full object-cover" />
                       : <div className="w-full h-full flex items-center justify-center"><Film size={12} className="text-neutral-600" /></div>
                     }
-                    {item.videoUrl && (
-                      <div className="absolute bottom-0.5 right-0.5 w-2 h-2 bg-green-500 rounded-full" title="Has video" />
-                    )}
+                    {item.videoUrl && <div className="absolute bottom-0.5 right-0.5 w-2 h-2 bg-green-500 rounded-full" title="Has video" />}
                   </div>
-
-                  {/* Info */}
                   <div className="flex-1 min-w-0">
                     <p className="text-xs text-neutral-300 font-medium truncate">Shot {item.shotNumber}</p>
                     <p className="text-xs text-neutral-600 truncate">{item.description || 'No description'}</p>
                   </div>
-
-                  {/* Duration */}
                   <span className="text-xs text-neutral-600 font-mono flex-shrink-0">
                     {(item.durationFrames / FPS).toFixed(1)}s
                   </span>
@@ -353,7 +333,7 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({ project, onUpdat
   const [tracks, setTracks] = useState<TimelineTrack[]>(DEFAULT_TRACKS);
   const [clips, setClips] = useState<TimelineClip[]>([]);
   const [sourceItems, setSourceItems] = useState<SourceItem[]>([]);
-  const [totalFrames, setTotalFrames] = useState(FPS * 60); // start at 1 minute
+  const [totalFrames, setTotalFrames] = useState(FPS * 60);
   const [playheadFrame, setPlayheadFrame] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [zoom, setZoom] = useState(1);
@@ -362,16 +342,19 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({ project, onUpdat
   const [outPoint, setOutPoint] = useState<number | null>(null);
   const [isDraggingPlayhead, setIsDraggingPlayhead] = useState(false);
   const [isDraggingClip, setIsDraggingClip] = useState<{ clipId: string; offsetFrames: number } | null>(null);
+  const [isTrimming, setIsTrimming] = useState<{ clipId: string; edge: 'left' | 'right'; startX: number; origStartFrame: number; origDuration: number; origInPoint: number; origOutPoint: number } | null>(null);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; clipId: string } | null>(null);
   const [volume, setVolume] = useState(1);
   const [isMuted, setIsMuted] = useState(false);
-  const [activePanel, setActivePanel] = useState<'source' | 'inspector'>('source');
+  const [activePanel, setActivePanel] = useState<'program' | 'inspector'>('program');
+  const [isExporting, setIsExporting] = useState(false);
 
   const playIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const programVideoRef = useRef<HTMLVideoElement>(null);
   const rulerRef = useRef<HTMLDivElement>(null);
   const tracksScrollRef = useRef<HTMLDivElement>(null);
   const rulerScrollRef = useRef<HTMLDivElement>(null);
+  const animFrameRef = useRef<number | null>(null);
 
   // ── Build source items from project (with real video durations) ───────────
 
@@ -403,7 +386,6 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({ project, onUpdat
       }
       if (!cancelled) {
         setSourceItems(items);
-        // Update existing clips with fresh imageUrl/videoUrl/duration
         setClips(prev => prev.map(c => {
           const src = items.find(i => i.shotId === c.shotId);
           if (!src) return c;
@@ -421,50 +403,65 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({ project, onUpdat
     return () => { cancelled = true; };
   }, [project.scenes]);
 
-  // Recalculate total timeline length whenever clips change
   useEffect(() => {
-    const end = clips.reduce((max, c) => Math.max(max, c.startFrame + c.durationFrames), 0);
+    const end = clips.reduce((max, c) => Math.max(max, c.startFrame + (c.outPoint - c.inPoint)), 0);
     setTotalFrames(Math.max(end + FPS * 10, FPS * 60));
   }, [clips]);
 
-  // ── Playback ──────────────────────────────────────────────────────────────
+  // ── Playback with requestAnimationFrame for smooth scrubbing ─────────────
 
   useEffect(() => {
     if (isPlaying) {
-      playIntervalRef.current = setInterval(() => {
-        setPlayheadFrame(f => {
-          if (f >= totalFrames - 1) { setIsPlaying(false); return 0; }
-          return f + 1;
-        });
-      }, 1000 / FPS);
+      let lastTime = performance.now();
+      const tick = (now: number) => {
+        const delta = now - lastTime;
+        const framesToAdvance = Math.round((delta / 1000) * FPS);
+        if (framesToAdvance > 0) {
+          lastTime = now;
+          setPlayheadFrame(f => {
+            const next = f + framesToAdvance;
+            if (next >= totalFrames - 1) { setIsPlaying(false); return 0; }
+            return next;
+          });
+        }
+        animFrameRef.current = requestAnimationFrame(tick);
+      };
+      animFrameRef.current = requestAnimationFrame(tick);
     } else {
-      if (playIntervalRef.current) clearInterval(playIntervalRef.current);
+      if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
     }
-    return () => { if (playIntervalRef.current) clearInterval(playIntervalRef.current); };
+    return () => { if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current); };
   }, [isPlaying, totalFrames]);
 
   // ── Sync program video to playhead ───────────────────────────────────────
 
   const getClipAtPlayhead = useCallback((): TimelineClip | null => {
-    return clips.find(c => {
-      const track = tracks.find(t => t.id === c.trackId);
-      if (!track?.visible || c.muted) return false;
-      return playheadFrame >= c.startFrame && playheadFrame < c.startFrame + c.durationFrames;
-    }) ?? null;
+    // Priority: video tracks first, then others
+    const videoTracks = tracks.filter(t => t.type === 'video' && t.visible);
+    for (const track of videoTracks) {
+      const clip = clips.find(c => {
+        if (c.trackId !== track.id || c.muted) return false;
+        const visibleDuration = c.outPoint - c.inPoint;
+        return playheadFrame >= c.startFrame && playheadFrame < c.startFrame + visibleDuration;
+      });
+      if (clip) return clip;
+    }
+    return null;
   }, [clips, tracks, playheadFrame]);
 
   const currentClip = getClipAtPlayhead();
 
   useEffect(() => {
     if (currentClip?.videoUrl && programVideoRef.current) {
-      const clipTime = (playheadFrame - currentClip.startFrame) / FPS;
-      if (Math.abs(programVideoRef.current.currentTime - clipTime) > 0.15) {
+      const clipTime = (playheadFrame - currentClip.startFrame + currentClip.inPoint) / FPS;
+      if (Math.abs(programVideoRef.current.currentTime - clipTime) > 0.1) {
         programVideoRef.current.currentTime = clipTime;
       }
+      programVideoRef.current.volume = isMuted ? 0 : volume;
       if (isPlaying && programVideoRef.current.paused) programVideoRef.current.play().catch(() => {});
       else if (!isPlaying && !programVideoRef.current.paused) programVideoRef.current.pause();
     }
-  }, [playheadFrame, isPlaying, currentClip]);
+  }, [playheadFrame, isPlaying, currentClip, volume, isMuted]);
 
   // ── Sync ruler ↔ tracks scroll ────────────────────────────────────────────
 
@@ -492,8 +489,13 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({ project, onUpdat
       if (e.key === 'i') setInPoint(playheadFrame);
       if (e.key === 'o') setOutPoint(playheadFrame);
       if (e.key === 'Escape') { setSelectedClipId(null); setContextMenu(null); }
-      if (e.key === 'Delete' || e.key === 'Backspace') {
-        if (selectedClipId) { setClips(prev => prev.filter(c => c.id !== selectedClipId)); setSelectedClipId(null); }
+      // Delete: normal delete
+      if (e.key === 'Delete' || (e.key === 'Backspace' && !e.shiftKey)) {
+        if (selectedClipId) { deleteClip(selectedClipId); }
+      }
+      // Shift+Delete: ripple delete
+      if ((e.key === 'Delete' || e.key === 'Backspace') && e.shiftKey) {
+        if (selectedClipId) { rippleDeleteClip(selectedClipId); }
       }
     };
     window.addEventListener('keydown', h);
@@ -522,13 +524,12 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({ project, onUpdat
   // ── Insert clip from Source Monitor ──────────────────────────────────────
 
   const handleInsertFromSource = useCallback((item: SourceItem, trackId: string) => {
-    // Find next free position on the track
     const trackClips = clips.filter(c => c.trackId === trackId).sort((a, b) => a.startFrame - b.startFrame);
     let startFrame = playheadFrame;
-    // Snap to end of last clip if overlapping
     for (const tc of trackClips) {
-      if (startFrame < tc.startFrame + tc.durationFrames && startFrame + item.durationFrames > tc.startFrame) {
-        startFrame = tc.startFrame + tc.durationFrames;
+      const tcVisibleDur = tc.outPoint - tc.inPoint;
+      if (startFrame < tc.startFrame + tcVisibleDur && startFrame + item.durationFrames > tc.startFrame) {
+        startFrame = tc.startFrame + tcVisibleDur;
       }
     }
     const newClip: TimelineClip = {
@@ -615,21 +616,104 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({ project, onUpdat
     return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
   }, [isDraggingClip, pxPerFrame]);
 
+  // ── Edge Trimming ─────────────────────────────────────────────────────────
+
+  const handleTrimMouseDown = (e: React.MouseEvent, clip: TimelineClip, edge: 'left' | 'right') => {
+    e.stopPropagation();
+    e.preventDefault();
+    if (clip.locked) return;
+    setIsTrimming({
+      clipId: clip.id,
+      edge,
+      startX: e.clientX,
+      origStartFrame: clip.startFrame,
+      origDuration: clip.durationFrames,
+      origInPoint: clip.inPoint,
+      origOutPoint: clip.outPoint,
+    });
+  };
+
+  useEffect(() => {
+    if (!isTrimming) return;
+    const onMove = (e: MouseEvent) => {
+      const deltaX = e.clientX - isTrimming.startX;
+      const deltaFrames = Math.round(deltaX / pxPerFrame);
+
+      setClips(prev => prev.map(c => {
+        if (c.id !== isTrimming.clipId) return c;
+        if (isTrimming.edge === 'left') {
+          // Trim left: move start frame and inPoint
+          const newInPoint = Math.max(0, Math.min(isTrimming.origOutPoint - FPS, isTrimming.origInPoint + deltaFrames));
+          const inDelta = newInPoint - isTrimming.origInPoint;
+          return {
+            ...c,
+            startFrame: isTrimming.origStartFrame + inDelta,
+            inPoint: newInPoint,
+          };
+        } else {
+          // Trim right: move outPoint
+          const newOutPoint = Math.max(isTrimming.origInPoint + FPS, Math.min(isTrimming.origDuration, isTrimming.origOutPoint + deltaFrames));
+          return {
+            ...c,
+            outPoint: newOutPoint,
+          };
+        }
+      }));
+    };
+    const onUp = () => setIsTrimming(null);
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
+  }, [isTrimming, pxPerFrame]);
+
   // ── Clip operations ───────────────────────────────────────────────────────
 
-  const deleteClip = (id: string) => { setClips(prev => prev.filter(c => c.id !== id)); setContextMenu(null); if (selectedClipId === id) setSelectedClipId(null); };
+  const deleteClip = (id: string) => {
+    setClips(prev => prev.filter(c => c.id !== id));
+    setContextMenu(null);
+    if (selectedClipId === id) setSelectedClipId(null);
+  };
+
+  const rippleDeleteClip = (id: string) => {
+    const clip = clips.find(c => c.id === id);
+    if (!clip) return;
+    const visibleDuration = clip.outPoint - clip.inPoint;
+    setClips(prev => {
+      return prev
+        .filter(c => c.id !== id)
+        .map(c => {
+          // Only ripple clips on the same track that come after the deleted clip
+          if (c.trackId === clip.trackId && c.startFrame > clip.startFrame) {
+            return { ...c, startFrame: Math.max(0, c.startFrame - visibleDuration) };
+          }
+          return c;
+        });
+    });
+    setContextMenu(null);
+    if (selectedClipId === id) setSelectedClipId(null);
+  };
+
   const duplicateClip = (id: string) => {
     const clip = clips.find(c => c.id === id);
     if (!clip) return;
-    setClips(prev => [...prev, { ...clip, id: crypto.randomUUID(), startFrame: clip.startFrame + clip.durationFrames }]);
+    const visibleDuration = clip.outPoint - clip.inPoint;
+    setClips(prev => [...prev, { ...clip, id: crypto.randomUUID(), startFrame: clip.startFrame + visibleDuration }]);
     setContextMenu(null);
   };
+
   const splitClip = (id: string) => {
     const clip = clips.find(c => c.id === id);
-    if (!clip || playheadFrame <= clip.startFrame || playheadFrame >= clip.startFrame + clip.durationFrames) return;
+    if (!clip) return;
+    const visibleDuration = clip.outPoint - clip.inPoint;
+    if (playheadFrame <= clip.startFrame || playheadFrame >= clip.startFrame + visibleDuration) return;
     const splitPoint = playheadFrame - clip.startFrame;
-    const left: TimelineClip = { ...clip, durationFrames: splitPoint, outPoint: splitPoint };
-    const right: TimelineClip = { ...clip, id: crypto.randomUUID(), startFrame: playheadFrame, durationFrames: clip.durationFrames - splitPoint, inPoint: 0, outPoint: clip.durationFrames - splitPoint };
+    const left: TimelineClip = { ...clip, outPoint: clip.inPoint + splitPoint };
+    const right: TimelineClip = {
+      ...clip,
+      id: crypto.randomUUID(),
+      startFrame: playheadFrame,
+      inPoint: clip.inPoint + splitPoint,
+    };
     setClips(prev => prev.map(c => c.id === id ? left : c).concat(right));
     setContextMenu(null);
   };
@@ -650,6 +734,60 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({ project, onUpdat
     if (tracks.length <= 1) return;
     setTracks(prev => prev.filter(t => t.id !== trackId));
     setClips(prev => prev.filter(c => c.trackId !== trackId));
+  };
+
+  // ── Export ────────────────────────────────────────────────────────────────
+
+  const handleExport = async () => {
+    // Export as a simple JSON project file that can be imported into video editors
+    // For a full FFmpeg.wasm render, we'd need the library loaded
+    setIsExporting(true);
+    try {
+      const exportData = {
+        fps: FPS,
+        totalFrames,
+        tracks: tracks.map(t => ({
+          id: t.id,
+          name: t.name,
+          type: t.type,
+        })),
+        clips: clips.map(c => ({
+          id: c.id,
+          trackId: c.trackId,
+          label: c.label,
+          startFrame: c.startFrame,
+          durationFrames: c.durationFrames,
+          inPoint: c.inPoint,
+          outPoint: c.outPoint,
+          startTimecode: framesToTimecode(c.startFrame),
+          endTimecode: framesToTimecode(c.startFrame + (c.outPoint - c.inPoint)),
+          durationTimecode: framesToTimecode(c.outPoint - c.inPoint),
+          videoUrl: c.videoUrl || null,
+          imageUrl: c.imageUrl ? '(base64 image)' : null,
+        })),
+        editDecisionList: clips
+          .sort((a, b) => a.startFrame - b.startFrame)
+          .map((c, i) => ({
+            editNumber: i + 1,
+            reelName: c.label,
+            trackName: tracks.find(t => t.id === c.trackId)?.name || c.trackId,
+            sourceIn: framesToTimecode(c.inPoint),
+            sourceOut: framesToTimecode(c.outPoint),
+            recordIn: framesToTimecode(c.startFrame),
+            recordOut: framesToTimecode(c.startFrame + (c.outPoint - c.inPoint)),
+          })),
+      };
+
+      const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${project.title || 'timeline'}_edl.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } finally {
+      setIsExporting(false);
+    }
   };
 
   const playheadPx = playheadFrame * pxPerFrame;
@@ -683,8 +821,8 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({ project, onUpdat
           {/* Tab bar */}
           <div className="flex items-center bg-neutral-900 border-b border-neutral-800 flex-shrink-0">
             <button
-              onClick={() => setActivePanel('source')}
-              className={`flex items-center gap-1.5 px-4 py-1.5 text-xs font-medium border-b-2 transition-colors ${activePanel === 'source' ? 'border-red-600 text-white' : 'border-transparent text-neutral-500 hover:text-neutral-300'}`}
+              onClick={() => setActivePanel('program')}
+              className={`flex items-center gap-1.5 px-4 py-1.5 text-xs font-medium border-b-2 transition-colors ${activePanel === 'program' ? 'border-red-600 text-white' : 'border-transparent text-neutral-500 hover:text-neutral-300'}`}
             >
               <Monitor size={12} /> Program Monitor
             </button>
@@ -699,7 +837,7 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({ project, onUpdat
           </div>
 
           {/* Program Monitor */}
-          <div className={`flex-1 flex flex-col min-h-0 ${activePanel !== 'source' ? 'hidden' : 'flex'}`} style={{ display: activePanel === 'source' ? 'flex' : 'none' }}>
+          <div className="flex-1 flex flex-col min-h-0" style={{ display: activePanel === 'program' ? 'flex' : 'none' }}>
             <div className="flex-1 relative bg-black flex items-center justify-center overflow-hidden">
               {currentClip?.videoUrl ? (
                 <video
@@ -721,7 +859,6 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({ project, onUpdat
                   </span>
                 </div>
               )}
-              {/* Timecode burn-in */}
               <div className="absolute bottom-3 left-1/2 -translate-x-1/2 bg-black/70 px-3 py-1 rounded font-mono text-sm text-white tracking-widest">
                 {framesToTimecode(playheadFrame)}
               </div>
@@ -778,9 +915,12 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({ project, onUpdat
                 <div className="grid grid-cols-2 gap-3">
                   {[
                     ['Start', framesToTimecode(selectedClip.startFrame)],
-                    ['End', framesToTimecode(selectedClip.startFrame + selectedClip.durationFrames)],
-                    ['Duration', framesToTimecode(selectedClip.durationFrames)],
+                    ['End', framesToTimecode(selectedClip.startFrame + (selectedClip.outPoint - selectedClip.inPoint))],
+                    ['Duration', framesToTimecode(selectedClip.outPoint - selectedClip.inPoint)],
                     ['Track', tracks.find(t => t.id === selectedClip.trackId)?.name ?? selectedClip.trackId],
+                    ['In Point', framesToTimecode(selectedClip.inPoint)],
+                    ['Out Point', framesToTimecode(selectedClip.outPoint)],
+                    ['Source Duration', framesToTimecode(selectedClip.durationFrames)],
                   ].map(([label, val]) => (
                     <div key={label}>
                       <p className="text-xs text-neutral-500 mb-0.5">{label}</p>
@@ -789,13 +929,14 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({ project, onUpdat
                   ))}
                 </div>
                 <div className="flex gap-1.5 flex-wrap">
-                  {selectedClip.imageUrl && <span className="text-xs px-2 py-0.5 rounded-full bg-blue-900/50 text-blue-300 border border-blue-800/50">🖼 Image</span>}
-                  {selectedClip.videoUrl && <span className="text-xs px-2 py-0.5 rounded-full bg-green-900/50 text-green-300 border border-green-800/50">🎬 Video</span>}
+                  {selectedClip.imageUrl && <span className="text-xs px-2 py-0.5 rounded-full bg-blue-900/50 text-blue-300 border border-blue-800/50">Image</span>}
+                  {selectedClip.videoUrl && <span className="text-xs px-2 py-0.5 rounded-full bg-green-900/50 text-green-300 border border-green-800/50">Video</span>}
                   {!selectedClip.imageUrl && !selectedClip.videoUrl && <span className="text-xs px-2 py-0.5 rounded-full bg-neutral-800 text-neutral-500">No media</span>}
                 </div>
                 <div className="space-y-1.5 pt-2 border-t border-neutral-800">
                   <button onClick={() => splitClip(selectedClip.id)} className="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-xs"><Scissors size={12} /> Split at playhead</button>
                   <button onClick={() => duplicateClip(selectedClip.id)} className="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-xs"><RefreshCw size={12} /> Duplicate</button>
+                  <button onClick={() => rippleDeleteClip(selectedClip.id)} className="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-orange-950/50 hover:bg-orange-900/50 text-orange-400 text-xs"><Trash2 size={12} /> Ripple Delete (Shift+Del)</button>
                   <button onClick={() => deleteClip(selectedClip.id)} className="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-red-950/50 hover:bg-red-900/50 text-red-400 text-xs"><Trash2 size={12} /> Delete clip</button>
                 </div>
               </div>
@@ -828,7 +969,17 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({ project, onUpdat
           <button onClick={() => addTrack('overlay')} className="flex items-center gap-1 px-2 py-0.5 text-xs bg-neutral-800 hover:bg-neutral-700 rounded text-neutral-300"><Layers size={11} /> Overlay</button>
         </div>
         <div className="flex-1" />
-        <span className="text-xs text-neutral-600">Space: Play · I/O: In/Out · +/-: Zoom · ←→: Step · Del: Delete clip</span>
+        {/* Export button */}
+        <button
+          onClick={handleExport}
+          disabled={clips.length === 0 || isExporting}
+          className="flex items-center gap-1.5 px-3 py-1 text-xs bg-green-700 hover:bg-green-600 disabled:opacity-40 disabled:cursor-not-allowed rounded text-white font-medium transition-colors"
+          title="Export Edit Decision List (EDL)"
+        >
+          <Download size={12} /> {isExporting ? 'Exporting...' : 'Export EDL'}
+        </button>
+        <div className="w-px h-4 bg-neutral-700 mx-1" />
+        <span className="text-xs text-neutral-600">Space: Play · I/O: In/Out · +/-: Zoom · ←→: Step · Del: Delete · Shift+Del: Ripple Delete</span>
       </div>
 
       {/* ═══════════════════════════════════════════════════════════════════
@@ -879,18 +1030,19 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({ project, onUpdat
           </div>
 
           {/* Track lanes */}
-          <div ref={tracksScrollRef} className="flex-1 overflow-auto relative" style={{ cursor: isDraggingClip ? 'grabbing' : 'default' }}>
+          <div ref={tracksScrollRef} className="flex-1 overflow-auto relative" style={{ cursor: isDraggingClip ? 'grabbing' : isTrimming ? 'col-resize' : 'default' }}>
             <div style={{ width: timelineWidth, position: 'relative' }}>
               {tracks.map(track => (
                 <div key={track.id} className="relative border-b border-neutral-800" style={{ height: track.height, opacity: track.visible ? 1 : 0.3 }}>
                   <div className="absolute inset-0 bg-neutral-900" />
                   <div className="absolute inset-0" style={{ backgroundImage: 'repeating-linear-gradient(90deg, transparent, transparent 59px, rgba(255,255,255,0.015) 59px, rgba(255,255,255,0.015) 60px)' }} />
                   {clips.filter(c => c.trackId === track.id).map(clip => {
-                    const clipWidthPx = Math.max(clip.durationFrames * pxPerFrame - 2, 4);
+                    const visibleDuration = clip.outPoint - clip.inPoint;
+                    const clipWidthPx = Math.max(visibleDuration * pxPerFrame - 2, 4);
                     return (
                       <div
                         key={clip.id}
-                        className={`absolute top-1 rounded-md overflow-hidden border-2 transition-shadow ${selectedClipId === clip.id ? 'z-10 shadow-lg' : ''} ${clip.locked ? 'cursor-not-allowed' : 'cursor-grab active:cursor-grabbing'}`}
+                        className={`absolute top-1 rounded-md overflow-hidden border-2 transition-shadow group ${selectedClipId === clip.id ? 'z-10 shadow-lg' : ''} ${clip.locked ? 'cursor-not-allowed' : 'cursor-grab active:cursor-grabbing'}`}
                         style={{
                           left: clip.startFrame * pxPerFrame,
                           width: clipWidthPx,
@@ -901,6 +1053,28 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({ project, onUpdat
                         onMouseDown={e => handleClipMouseDown(e, clip)}
                         onContextMenu={e => { e.preventDefault(); e.stopPropagation(); setContextMenu({ x: e.clientX, y: e.clientY, clipId: clip.id }); }}
                       >
+                        {/* Left trim handle */}
+                        {!clip.locked && (
+                          <div
+                            className="absolute left-0 top-0 bottom-0 z-20 cursor-col-resize opacity-0 group-hover:opacity-100 transition-opacity flex items-center"
+                            style={{ width: TRIM_HANDLE_WIDTH }}
+                            onMouseDown={e => handleTrimMouseDown(e, clip, 'left')}
+                          >
+                            <div className="w-1 h-8 bg-white/60 rounded-full mx-auto" />
+                          </div>
+                        )}
+
+                        {/* Right trim handle */}
+                        {!clip.locked && (
+                          <div
+                            className="absolute right-0 top-0 bottom-0 z-20 cursor-col-resize opacity-0 group-hover:opacity-100 transition-opacity flex items-center"
+                            style={{ width: TRIM_HANDLE_WIDTH }}
+                            onMouseDown={e => handleTrimMouseDown(e, clip, 'right')}
+                          >
+                            <div className="w-1 h-8 bg-white/60 rounded-full mx-auto" />
+                          </div>
+                        )}
+
                         {clip.imageUrl && clipWidthPx > 40 && (
                           <div className="absolute inset-0 opacity-35"><img src={clip.imageUrl} alt="" className="w-full h-full object-cover" draggable={false} /></div>
                         )}
@@ -912,6 +1086,12 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({ project, onUpdat
                         )}
                         {clip.videoUrl && <div className="absolute top-1.5 right-1.5"><Film size={10} className="text-green-400" /></div>}
                         {clip.locked && <div className="absolute inset-0 flex items-center justify-center bg-black/30"><Lock size={12} className="text-yellow-400" /></div>}
+                        {/* Trim indicator: show if clip is trimmed */}
+                        {(clip.inPoint > 0 || clip.outPoint < clip.durationFrames) && (
+                          <div className="absolute top-1 left-1.5 flex items-center gap-0.5">
+                            <GripVertical size={8} className="text-yellow-400" />
+                          </div>
+                        )}
                       </div>
                     );
                   })}
@@ -936,17 +1116,18 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({ project, onUpdat
         <span>Duration: {framesToTimecode(totalFrames)}</span>
         <span>Zoom: {Math.round(zoom * 100)}%</span>
         <span>{FPS} fps</span>
-        {selectedClip && <span className="text-neutral-400">Selected: <span className="text-white">{selectedClip.label}</span> · {(selectedClip.durationFrames / FPS).toFixed(2)}s</span>}
+        {selectedClip && <span className="text-neutral-400">Selected: <span className="text-white">{selectedClip.label}</span> · {((selectedClip.outPoint - selectedClip.inPoint) / FPS).toFixed(2)}s</span>}
         <div className="flex-1" />
-        <span className="text-neutral-600">Double-click source clip to insert · Del: delete selected</span>
+        <span className="text-neutral-600">Double-click source to insert · Drag clip edges to trim · Shift+Del: Ripple Delete</span>
       </div>
 
       {/* Context menu */}
       {contextMenu && (
-        <div className="fixed z-50 bg-neutral-800 border border-neutral-700 rounded-lg shadow-xl py-1 min-w-36" style={{ left: contextMenu.x, top: contextMenu.y }} onClick={e => e.stopPropagation()}>
+        <div className="fixed z-50 bg-neutral-800 border border-neutral-700 rounded-lg shadow-xl py-1 min-w-44" style={{ left: contextMenu.x, top: contextMenu.y }} onClick={e => e.stopPropagation()}>
           <button onClick={() => splitClip(contextMenu.clipId)} className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-neutral-700 text-sm text-neutral-200"><Scissors size={13} /> Split at playhead</button>
           <button onClick={() => duplicateClip(contextMenu.clipId)} className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-neutral-700 text-sm text-neutral-200"><RefreshCw size={13} /> Duplicate</button>
           <div className="border-t border-neutral-700 my-1" />
+          <button onClick={() => rippleDeleteClip(contextMenu.clipId)} className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-orange-900/50 text-sm text-orange-400"><Trash2 size={13} /> Ripple Delete</button>
           <button onClick={() => deleteClip(contextMenu.clipId)} className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-red-900/50 text-sm text-red-400"><Trash2 size={13} /> Delete</button>
         </div>
       )}
