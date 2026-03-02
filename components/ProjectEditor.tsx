@@ -10,7 +10,9 @@ import { ShotDetailModal } from './ShotDetailModal';
 import { VideoShotCard, WanGenerationSettings } from './VideoShotCard';
 import { generateWanVideo, generateAuroraVideo, validateFalApiKey, AuroraGenerationSettings } from '../services/falService';
 import { MotionControl } from './MotionControl';
-import { Clapperboard, Settings, Users, MapPin, Film, ChevronRight, LayoutGrid, Plus, ChevronLeft, Home, Video, Play, Loader2, Download, AlertCircle, ImageIcon, MonitorPlay, Layers, Trash2, Edit3, ChevronDown, ChevronUp, Focus, FileText, Upload, CheckSquare, Square } from 'lucide-react';
+import { Clapperboard, Settings, Users, MapPin, Film, ChevronRight, LayoutGrid, Plus, ChevronLeft, Home, Video, Play, Loader2, Download, AlertCircle, ImageIcon, MonitorPlay, Layers, Trash2, Edit3, ChevronDown, ChevronUp, Focus, FileText, Upload, CheckSquare, Square, Bot, Clock } from 'lucide-react';
+import { AIAgent } from './agent/AIAgent';
+import { TimelineEditor } from './timeline/TimelineEditor';
 
 interface ProjectEditorProps {
   initialProject: Project;
@@ -35,7 +37,8 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ initialProject, on
     return initialProject;
   });
   const [activeSceneId, setActiveSceneId] = useState<string>(() => project.scenes?.[0]?.id || '');
-  const [activeTab, setActiveTab] = useState<'script' | 'characters' | 'locations' | 'board' | 'video' | 'motion' | 'settings'>('board');
+  const [activeTab, setActiveTab] = useState<'script' | 'characters' | 'locations' | 'board' | 'video' | 'motion' | 'settings' | 'timeline'>('board');
+  const [agentOpen, setAgentOpen] = useState(false);
   const [isBreakingDown, setIsBreakingDown] = useState(false);
   const [isGeneratingCoverage, setIsGeneratingCoverage] = useState(false);
   const [coverageSourceShotId, setCoverageSourceShotId] = useState<string | null>(null);
@@ -1689,8 +1692,26 @@ Style: ${project.settings.cinematographer}, shot on ${project.settings.filmStock
             <button onClick={() => setActiveTab('settings')} className={`px-4 py-2 text-sm font-medium rounded-md transition-colors flex items-center gap-2 ${activeTab === 'settings' ? 'bg-neutral-800 text-white' : 'text-neutral-400 hover:text-white'}`}>
               <Settings className="w-3 h-3" /> Settings
             </button>
+            <ChevronRight className="w-4 h-4 text-neutral-600" />
+            <button onClick={() => setActiveTab('timeline')} className={`px-4 py-2 text-sm font-medium rounded-md transition-colors flex items-center gap-2 ${activeTab === 'timeline' ? 'bg-blue-900/20 text-blue-400 border border-blue-900/30' : 'text-neutral-400 hover:text-white'}`}>
+              <Clock className="w-3 h-3" /> Timeline
+            </button>
           </div>
           <div className="flex items-center gap-4">
+            {/* SLOPBOT AI Agent Button */}
+            <button
+              onClick={() => setAgentOpen(v => !v)}
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-all border ${
+                agentOpen
+                  ? 'bg-red-600 text-white border-red-500 shadow-lg shadow-red-900/40'
+                  : 'bg-neutral-800 text-neutral-300 border-neutral-700 hover:border-red-600 hover:text-white'
+              }`}
+              title="Open SLOPBOT AI Agent"
+            >
+              <Bot size={14} />
+              <span>SLOPBOT</span>
+              <div className={`w-1.5 h-1.5 rounded-full ${agentOpen ? 'bg-green-400' : 'bg-neutral-600'}`} />
+            </button>
             {activeTab === 'board' && (
               <>
                 <Button size="sm" variant="secondary" onClick={handleAddShot}>
@@ -1707,7 +1728,13 @@ Style: ${project.settings.cinematographer}, shot on ${project.settings.filmStock
           </div>
         </header>
 
-        <div className="flex-1 overflow-y-auto p-8 custom-scrollbar">
+        <div className={activeTab === 'timeline' ? 'flex-1 flex flex-col min-h-0 overflow-hidden' : 'flex-1 overflow-y-auto p-8 custom-scrollbar'}>
+          {activeTab === 'timeline' && (
+            <TimelineEditor
+              project={project}
+              onUpdateProject={(updated) => setProject(updated)}
+            />
+          )}
           {activeTab === 'script' && (
             <div className="max-w-3xl mx-auto space-y-6 animate-fade-in">
               {/* PDF Upload Section */}
@@ -2457,6 +2484,15 @@ TIP: Select (highlight) a portion of text and click 'Analyze Scene' to analyze o
             </div>
           )}
         </div>
+
+        {/* SLOPBOT AI Agent */}
+        <AIAgent
+          project={project}
+          onUpdateProject={(updated) => setProject(updated)}
+          onNavigate={(tab) => setActiveTab(tab as any)}
+          onClose={() => setAgentOpen(false)}
+          isOpen={agentOpen}
+        />
 
         {expandedShotId && (
           <ShotDetailModal
