@@ -1507,8 +1507,8 @@ Style: ${project.settings.cinematographer}, shot on ${project.settings.filmStock
   return (
     <div className="flex h-screen overflow-hidden bg-neutral-950 text-neutral-200 animate-fade-in">
 
-      {/* Sidebar - Cinematic Controls */}
-      <aside className="w-80 bg-neutral-900 border-r border-neutral-800 flex flex-col overflow-y-auto custom-scrollbar">
+      {/* Sidebar - Cinematic Controls (hidden on timeline tab for full-width NLE) */}
+      <aside className={`w-80 bg-neutral-900 border-r border-neutral-800 flex flex-col overflow-y-auto custom-scrollbar${activeTab === 'timeline' ? ' hidden' : ''}`}>
         <div className="p-6 border-b border-neutral-800">
           {/* Back Button */}
           <button onClick={onBack} className="flex items-center text-xs text-neutral-500 hover:text-white mb-4 transition-colors">
