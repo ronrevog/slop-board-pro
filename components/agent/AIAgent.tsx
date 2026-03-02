@@ -1,7 +1,9 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Project, Shot, Scene, Character, Location, CinematicSettings } from '../../types';
-import { Bot, X, Send, Loader2, ChevronDown, ChevronUp, Sparkles, Trash2, AlertCircle } from 'lucide-react';
+import { Bot, X, Send, Loader2, ChevronDown, ChevronUp, Sparkles, Trash2, AlertCircle, Image, Film, Zap } from 'lucide-react';
 import { GoogleGenAI } from '@google/genai';
+import { generateAssetImage, generateShotImage, generateShotVideo } from '../../services/geminiService';
+import { generateWanVideo } from '../../services/falService';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -14,6 +16,7 @@ export interface AgentMessage {
   timestamp: number;
   actions?: AgentAction[];
   error?: boolean;
+  generating?: boolean; // shows spinner while async actions run
 }
 
 export interface AgentAction {
@@ -31,21 +34,20 @@ interface AIAgentProps {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Gemini client — resolves API key from Vite-injected env vars
+// API key resolution
 // ─────────────────────────────────────────────────────────────────────────────
 
 function getGeminiKey(): string {
-  // Vite injects both via define in vite.config.ts
-  const key =
+  return (
     (typeof process !== 'undefined' && process.env?.API_KEY) ||
     (typeof process !== 'undefined' && process.env?.GEMINI_API_KEY) ||
     localStorage.getItem('gemini_api_key') ||
-    '';
-  return key;
+    ''
+  );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Call Gemini
+// Call Gemini for planning/reasoning (text only)
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function callAgent(
@@ -63,6 +65,8 @@ async function callAgent(
 
   const projectSummary = {
     title: project.title,
+    settings: project.settings,
+    videoSettings: project.videoSettings,
     scenes: project.scenes?.map(s => ({
       id: s.id,
       name: s.name,
@@ -74,6 +78,11 @@ async function callAgent(
         shotType: sh.shotType,
         cameraMove: sh.cameraMove,
         action: sh.action,
+        hasImage: !!sh.imageUrl,
+        hasVideo: !!sh.videoUrl,
+        videoPrompt: sh.videoPrompt,
+        characters: sh.characters,
+        locationId: sh.locationId,
       })),
     })),
     characters: project.characters?.map(c => ({
@@ -82,6 +91,8 @@ async function callAgent(
       description: c.description,
       age: c.age,
       occupation: c.occupation,
+      wardrobe: c.wardrobe,
+      hasImage: !!c.imageUrl,
     })),
     locations: project.locations?.map(l => ({
       id: l.id,
@@ -89,8 +100,8 @@ async function callAgent(
       description: l.description,
       timeOfDay: l.timeOfDay,
       atmosphere: l.atmosphere,
+      hasImage: !!l.imageUrl,
     })),
-    settings: project.settings,
   };
 
   const historyContext = history
@@ -98,9 +109,18 @@ async function callAgent(
     .map(m => `${m.role === 'user' ? 'User' : 'SLOPBOT'}: ${m.text}`)
     .join('\n');
 
-  const systemPrompt = `You are SLOPBOT, an AI director's assistant embedded inside Slop Board — a cinematic storyboarding and pre-production app.
-You have FULL control over the entire project. You can create, edit, and delete scenes, shots, characters, locations, and settings.
-You can also navigate to any section of the app.
+  const systemPrompt = `You are SLOPBOT, an AI director's assistant embedded inside Slop Board — a professional cinematic pre-production and storyboarding app.
+
+You have FULL AUTONOMOUS CONTROL over the entire app. You can:
+- Create, edit, delete scenes, shots, characters, and locations
+- Generate storyboard frame images for any shot using Gemini image generation
+- Generate character portrait/reference images
+- Generate location/environment images
+- Generate videos for shots using Veo (image-to-video) or Wan (fal.ai)
+- Set video prompts for shots
+- Update all cinematic settings (cinematographer, film stock, lens, lighting, aspect ratio)
+- Navigate to any section of the app
+- Rename the project
 
 CURRENT PROJECT STATE:
 ${JSON.stringify(projectSummary, null, 2)}
@@ -112,44 +132,80 @@ When you want to perform an action, include it in your response as a JSON block 
 ]
 \`\`\`
 
+═══════════════════════════════════════════════════════
 AVAILABLE ACTIONS AND THEIR EXACT PAYLOADS:
+═══════════════════════════════════════════════════════
 
-Project:
+── Project ──────────────────────────────────────────────────────────
 - RENAME_PROJECT: { "title": string }
 
-Scenes:
+── Scenes ───────────────────────────────────────────────────────────
 - ADD_SCENE: { "name": string }
 - DELETE_SCENE: { "sceneId": string }
 - RENAME_SCENE: { "sceneId": string, "name": string }
 
-Shots (always use the scene's ID from the project state above):
+── Shots ────────────────────────────────────────────────────────────
 - ADD_SHOT: {
     "sceneId": string,
     "description": string,
     "action": string,
     "shotType": "Extreme Wide"|"Wide"|"Medium"|"Close Up"|"Extreme Close Up"|"Insert"|"High Angle"|"Low Angle"|"Dutch Angle (45°)"|"Overhead"|"Over the Shoulder",
-    "cameraMove": "Static"|"Dolly In"|"Dolly Out"|"Pan"|"Tilt"|"Handheld"|"Tracking"|"Crane"|"Arc"|"Zoom In"|"Zoom Out"|"Whip Pan"
+    "cameraMove": "Static"|"Dolly In"|"Dolly Out"|"Pan"|"Tilt"|"Handheld"|"Tracking"|"Crane"|"Arc"|"Zoom In"|"Zoom Out"|"Whip Pan",
+    "characterIds"?: string[],   // optional: IDs of characters to include
+    "locationId"?: string        // optional: ID of location for this shot
   }
 - DELETE_SHOT: { "sceneId": string, "shotId": string }
-- UPDATE_SHOT: { "sceneId": string, "shotId": string, "description"?: string, "action"?: string, "shotType"?: string, "cameraMove"?: string, "notes"?: string }
+- UPDATE_SHOT: { "sceneId": string, "shotId": string, "description"?: string, "action"?: string, "shotType"?: string, "cameraMove"?: string, "notes"?: string, "videoPrompt"?: string }
 
-Characters:
-- ADD_CHARACTER: { "name": string, "description": string, "age"?: string, "occupation"?: string, "wardrobe"?: string }
+── Image Generation (ASYNC — triggers real AI image generation) ──────
+- GENERATE_SHOT_IMAGE: {
+    "sceneId": string,
+    "shotId": string
+    // Generates a cinematic storyboard frame for this shot using Gemini image gen
+    // The shot must already exist with a description
+  }
+- GENERATE_CHARACTER_IMAGE: {
+    "characterId": string
+    // Generates a character portrait/reference image using Gemini image gen
+  }
+- GENERATE_LOCATION_IMAGE: {
+    "locationId": string
+    // Generates a cinematic environment image for this location using Gemini image gen
+  }
+
+── Video Generation (ASYNC — triggers real video generation) ─────────
+- GENERATE_SHOT_VIDEO: {
+    "sceneId": string,
+    "shotId": string,
+    "model": "fast"|"quality",   // "fast" = veo-3.1-fast, "quality" = veo-3.1
+    "prompt": string             // Motion/action prompt for the video
+    // The shot MUST have an image (hasImage: true) before generating video
+  }
+- SET_VIDEO_PROMPT: {
+    "sceneId": string,
+    "shotId": string,
+    "prompt": string
+  }
+
+── Characters ───────────────────────────────────────────────────────
+- ADD_CHARACTER: { "name": string, "description": string, "age"?: string, "occupation"?: string, "wardrobe"?: string, "physicalFeatures"?: string }
 - UPDATE_CHARACTER: { "characterId": string, "name"?: string, "description"?: string, "age"?: string, "occupation"?: string, "wardrobe"?: string }
 - DELETE_CHARACTER: { "characterId": string }
 
-Locations:
-- ADD_LOCATION: { "name": string, "description": string, "timeOfDay"?: string, "atmosphere"?: string }
+── Locations ────────────────────────────────────────────────────────
+- ADD_LOCATION: { "name": string, "description": string, "timeOfDay"?: string, "atmosphere"?: string, "weather"?: string }
 - UPDATE_LOCATION: { "locationId": string, "name"?: string, "description"?: string, "timeOfDay"?: string, "atmosphere"?: string }
 - DELETE_LOCATION: { "locationId": string }
 
-Cinematic Settings:
-- UPDATE_SETTINGS: { "cinematographer"?: string, "filmStock"?: string, "lens"?: string, "lighting"?: string, "aspectRatio"?: string, "colorGrade"?: string }
+── Cinematic Settings ────────────────────────────────────────────────
+- UPDATE_SETTINGS: { "cinematographer"?: string, "filmStock"?: string, "lens"?: string, "lighting"?: string, "aspectRatio"?: "16:9"|"21:9"|"2.39:1"|"4:3"|"1:1"|"9:16", "colorGrade"?: string }
 
-Navigation (switches the active tab in the app):
+── Navigation ───────────────────────────────────────────────────────
 - NAVIGATE: { "tab": "script"|"characters"|"locations"|"board"|"video"|"motion"|"settings"|"timeline" }
 
+═══════════════════════════════════════════════════════
 RULES:
+═══════════════════════════════════════════════════════
 1. Always respond conversationally AND perform the requested actions.
 2. When creating multiple shots, include them all in a single actions array.
 3. Always use the exact scene/character/location IDs from the project state above.
@@ -157,6 +213,11 @@ RULES:
 5. Keep your conversational reply concise (2-4 sentences max).
 6. If asked to "go to" or "navigate to" a section, use the NAVIGATE action.
 7. If the project has no scenes, create one first before adding shots.
+8. For GENERATE_SHOT_IMAGE: the shot must exist first. Create it with ADD_SHOT, then generate the image in the SAME actions array.
+9. For GENERATE_SHOT_VIDEO: the shot MUST have an image (hasImage: true). If it doesn't, generate the image first.
+10. You can chain actions: ADD_CHARACTER → GENERATE_CHARACTER_IMAGE in one response.
+11. When the user asks to "generate" or "create" something visual, always include the appropriate GENERATE_ action.
+12. For video generation, always write a cinematic motion prompt describing camera movement and action.
 
 CONVERSATION HISTORY:
 ${historyContext}
@@ -207,15 +268,22 @@ SLOPBOT:`;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Apply actions to the project
+// Apply synchronous actions to the project (returns updated project + async queue)
 // ─────────────────────────────────────────────────────────────────────────────
+
+interface AsyncTask {
+  type: 'GENERATE_SHOT_IMAGE' | 'GENERATE_CHARACTER_IMAGE' | 'GENERATE_LOCATION_IMAGE' | 'GENERATE_SHOT_VIDEO';
+  description: string;
+  payload: Record<string, unknown>;
+}
 
 function applyActions(
   project: Project,
   actions: AgentAction[],
   onNavigate?: (tab: string) => void
-): Project {
+): { updated: Project; asyncTasks: AsyncTask[] } {
   let updated = { ...project };
+  const asyncTasks: AsyncTask[] = [];
 
   for (const action of actions) {
     const p = action.payload as Record<string, unknown> | undefined;
@@ -271,8 +339,9 @@ function applyActions(
           dialogueLines: [],
           shotType: (p?.shotType as Shot['shotType']) || 'Medium',
           cameraMove: (p?.cameraMove as Shot['cameraMove']) || 'Static',
-          characters: [],
-          locationId: updated.locations?.[0]?.id ?? '',
+          characters: (p?.characterIds as string[]) || [],
+          locationId: (p?.locationId as string) || updated.locations?.[0]?.id || '',
+          videoPrompt: (p?.videoPrompt as string) || '',
           isGenerating: false,
           isEditing: false,
         };
@@ -320,7 +389,30 @@ function applyActions(
                         ...(p.shotType !== undefined && { shotType: p.shotType as Shot['shotType'] }),
                         ...(p.cameraMove !== undefined && { cameraMove: p.cameraMove as Shot['cameraMove'] }),
                         ...(p.notes !== undefined && { notes: p.notes as string }),
+                        ...(p.videoPrompt !== undefined && { videoPrompt: p.videoPrompt as string }),
                       };
+                    }
+                    return sh;
+                  }),
+                };
+              }
+              return s;
+            }) ?? [],
+          };
+        }
+        break;
+
+      case 'SET_VIDEO_PROMPT':
+        if (p?.sceneId && p?.shotId && p?.prompt) {
+          updated = {
+            ...updated,
+            scenes: updated.scenes?.map(s => {
+              if (s.id === p.sceneId) {
+                return {
+                  ...s,
+                  shots: s.shots.map(sh => {
+                    if (sh.id === p.shotId) {
+                      return { ...sh, videoPrompt: p.prompt as string };
                     }
                     return sh;
                   }),
@@ -341,6 +433,7 @@ function applyActions(
           age: p?.age as string | undefined,
           occupation: p?.occupation as string | undefined,
           wardrobe: p?.wardrobe as string | undefined,
+          physicalFeatures: p?.physicalFeatures as string | undefined,
           isGenerating: false,
           isEditing: false,
         };
@@ -361,6 +454,7 @@ function applyActions(
                   ...(p.age !== undefined && { age: p.age as string }),
                   ...(p.occupation !== undefined && { occupation: p.occupation as string }),
                   ...(p.wardrobe !== undefined && { wardrobe: p.wardrobe as string }),
+                  ...(p.physicalFeatures !== undefined && { physicalFeatures: p.physicalFeatures as string }),
                 };
               }
               return c;
@@ -386,6 +480,7 @@ function applyActions(
           description: (p?.description as string) || '',
           timeOfDay: p?.timeOfDay as string | undefined,
           atmosphere: p?.atmosphere as string | undefined,
+          weather: p?.weather as string | undefined,
           isGenerating: false,
           isEditing: false,
         };
@@ -405,6 +500,7 @@ function applyActions(
                   ...(p.description !== undefined && { description: p.description as string }),
                   ...(p.timeOfDay !== undefined && { timeOfDay: p.timeOfDay as string }),
                   ...(p.atmosphere !== undefined && { atmosphere: p.atmosphere as string }),
+                  ...(p.weather !== undefined && { weather: p.weather as string }),
                 };
               }
               return l;
@@ -444,13 +540,166 @@ function applyActions(
         }
         break;
 
+      // ── Async image/video generation — queued for execution after state update ──
+      case 'GENERATE_SHOT_IMAGE':
+      case 'GENERATE_CHARACTER_IMAGE':
+      case 'GENERATE_LOCATION_IMAGE':
+      case 'GENERATE_SHOT_VIDEO':
+        if (p) {
+          asyncTasks.push({
+            type: action.type as AsyncTask['type'],
+            description: action.description,
+            payload: p,
+          });
+        }
+        break;
+
       default:
         console.warn('SLOPBOT: unknown action type:', action.type);
         break;
     }
   }
 
-  return updated;
+  return { updated, asyncTasks };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Execute async generation tasks
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function executeAsyncTask(
+  task: AsyncTask,
+  project: Project,
+  onUpdateProject: (p: Project) => void
+): Promise<string> {
+  const p = task.payload;
+
+  switch (task.type) {
+    case 'GENERATE_SHOT_IMAGE': {
+      const sceneId = p.sceneId as string;
+      const shotId = p.shotId as string;
+      const scene = project.scenes?.find(s => s.id === sceneId);
+      const shot = scene?.shots?.find(sh => sh.id === shotId);
+      if (!shot) throw new Error(`Shot ${shotId} not found`);
+
+      const imageUrl = await generateShotImage(
+        shot,
+        project.settings,
+        project.characters ?? [],
+        project.locations ?? [],
+        scene?.shots ?? []
+      );
+
+      // Update project with the generated image
+      const updatedProject: Project = {
+        ...project,
+        scenes: project.scenes?.map(s => {
+          if (s.id === sceneId) {
+            return {
+              ...s,
+              shots: s.shots.map(sh => {
+                if (sh.id === shotId) {
+                  return { ...sh, imageUrl, isGenerating: false };
+                }
+                return sh;
+              }),
+            };
+          }
+          return s;
+        }) ?? [],
+      };
+      onUpdateProject(updatedProject);
+      return `Generated storyboard frame for Shot #${shot.number}`;
+    }
+
+    case 'GENERATE_CHARACTER_IMAGE': {
+      const characterId = p.characterId as string;
+      const character = project.characters?.find(c => c.id === characterId);
+      if (!character) throw new Error(`Character ${characterId} not found`);
+
+      const imageUrl = await generateAssetImage(
+        'Character',
+        character.name,
+        [character.description, character.age ? `Age: ${character.age}` : '', character.wardrobe ? `Wardrobe: ${character.wardrobe}` : '', character.physicalFeatures || ''].filter(Boolean).join('. '),
+        project.settings
+      );
+
+      const updatedProject: Project = {
+        ...project,
+        characters: project.characters?.map(c => {
+          if (c.id === characterId) {
+            return { ...c, imageUrl, originalImageUrl: imageUrl, isGenerating: false };
+          }
+          return c;
+        }) ?? [],
+      };
+      onUpdateProject(updatedProject);
+      return `Generated portrait for ${character.name}`;
+    }
+
+    case 'GENERATE_LOCATION_IMAGE': {
+      const locationId = p.locationId as string;
+      const location = project.locations?.find(l => l.id === locationId);
+      if (!location) throw new Error(`Location ${locationId} not found`);
+
+      const imageUrl = await generateAssetImage(
+        'Location',
+        location.name,
+        [location.description, location.timeOfDay ? `Time: ${location.timeOfDay}` : '', location.atmosphere ? `Atmosphere: ${location.atmosphere}` : ''].filter(Boolean).join('. '),
+        project.settings
+      );
+
+      const updatedProject: Project = {
+        ...project,
+        locations: project.locations?.map(l => {
+          if (l.id === locationId) {
+            return { ...l, imageUrl, originalImageUrl: imageUrl, isGenerating: false };
+          }
+          return l;
+        }) ?? [],
+      };
+      onUpdateProject(updatedProject);
+      return `Generated environment image for ${location.name}`;
+    }
+
+    case 'GENERATE_SHOT_VIDEO': {
+      const sceneId = p.sceneId as string;
+      const shotId = p.shotId as string;
+      const model = (p.model as 'fast' | 'quality') || 'fast';
+      const prompt = p.prompt as string;
+
+      const scene = project.scenes?.find(s => s.id === sceneId);
+      const shot = scene?.shots?.find(sh => sh.id === shotId);
+      if (!shot) throw new Error(`Shot ${shotId} not found`);
+      if (!shot.imageUrl) throw new Error(`Shot #${shot.number} needs an image before generating video. Generate the image first.`);
+
+      // Use Veo via geminiService
+      const videoUrl = await generateShotVideo(shot, project.settings, model, prompt || shot.videoPrompt || shot.description);
+
+      const updatedProject: Project = {
+        ...project,
+        scenes: project.scenes?.map(s => {
+          if (s.id === sceneId) {
+            return {
+              ...s,
+              shots: s.shots.map(sh => {
+                if (sh.id === shotId) {
+                  return { ...sh, videoUrl, isVideoGenerating: false, videoModel: model };
+                }
+                return sh;
+              }),
+            };
+          }
+          return s;
+        }) ?? [],
+      };
+      onUpdateProject(updatedProject);
+      return `Generated video for Shot #${shot.number}`;
+    }
+
+    default:
+      throw new Error(`Unknown async task type: ${task.type}`);
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -458,12 +707,14 @@ function applyActions(
 // ─────────────────────────────────────────────────────────────────────────────
 
 const QUICK_ACTIONS = [
-  'Add a new scene',
-  'Create 3 cinematic shots',
-  'Add a character',
-  'Add a location',
-  'Go to timeline',
-  'What shots do I have?',
+  { label: 'Create 3 shots + generate images', icon: '🎬' },
+  { label: 'Generate images for all shots', icon: '🖼️' },
+  { label: 'Add a character and generate portrait', icon: '🎭' },
+  { label: 'Add a location and generate image', icon: '🌆' },
+  { label: 'Generate video for Shot 1', icon: '🎥' },
+  { label: 'Go to timeline', icon: '⏱️' },
+  { label: 'What shots do I have?', icon: '📋' },
+  { label: 'Change cinematographer to Roger Deakins style', icon: '🎞️' },
 ];
 
 export const AIAgent: React.FC<AIAgentProps> = ({
@@ -477,7 +728,7 @@ export const AIAgent: React.FC<AIAgentProps> = ({
     {
       id: 'welcome',
       role: 'agent',
-      text: `Hey! I'm **SLOPBOT** — your AI director's assistant.\n\nI have full control over this project. I can create scenes, shots, characters, and locations, update cinematic settings, and navigate anywhere in the app.\n\nWhat would you like to do?`,
+      text: `Hey! I'm **SLOPBOT** — your AI director with full control over this project.\n\nI can create scenes, shots, characters, and locations — and I can **generate storyboard images**, **character portraits**, **location visuals**, and **videos** for any shot. I can also navigate anywhere in the app.\n\nWhat would you like to create?`,
       timestamp: Date.now(),
     },
   ]);
@@ -485,8 +736,13 @@ export const AIAgent: React.FC<AIAgentProps> = ({
   const [isLoading, setIsLoading] = useState(false);
   const [isMinimized, setIsMinimized] = useState(false);
   const [apiKeyMissing, setApiKeyMissing] = useState(false);
+  const [generatingTasks, setGeneratingTasks] = useState<string[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  // Keep a ref to the latest project so async tasks always use fresh state
+  const projectRef = useRef(project);
+  useEffect(() => { projectRef.current = project; }, [project]);
 
   // Check API key on mount
   useEffect(() => {
@@ -505,8 +761,8 @@ export const AIAgent: React.FC<AIAgentProps> = ({
     }
   }, [isOpen, isMinimized]);
 
-  const handleSend = useCallback(async () => {
-    const text = input.trim();
+  const handleSend = useCallback(async (overrideText?: string) => {
+    const text = (overrideText ?? input).trim();
     if (!text || isLoading) return;
 
     const userMsg: AgentMessage = {
@@ -523,10 +779,15 @@ export const AIAgent: React.FC<AIAgentProps> = ({
     try {
       const { reply, actions } = await callAgent(text, project, [...messages, userMsg]);
 
-      // Apply actions to project state
+      // Apply synchronous actions first
+      let currentProject = project;
+      let asyncTasks: AsyncTask[] = [];
+
       if (actions.length > 0) {
-        const updatedProject = applyActions(project, actions, onNavigate);
-        onUpdateProject(updatedProject);
+        const result = applyActions(project, actions, onNavigate);
+        currentProject = result.updated;
+        asyncTasks = result.asyncTasks;
+        onUpdateProject(currentProject);
       }
 
       const agentMsg: AgentMessage = {
@@ -536,9 +797,46 @@ export const AIAgent: React.FC<AIAgentProps> = ({
         timestamp: Date.now(),
         actions,
         error: reply.startsWith('Gemini error:') || reply.startsWith('No Gemini API key'),
+        generating: asyncTasks.length > 0,
       };
 
       setMessages(prev => [...prev, agentMsg]);
+
+      // Execute async generation tasks sequentially
+      if (asyncTasks.length > 0) {
+        const taskLabels = asyncTasks.map(t => t.description);
+        setGeneratingTasks(taskLabels);
+
+        const completedDescriptions: string[] = [];
+
+        for (const task of asyncTasks) {
+          try {
+            const result = await executeAsyncTask(task, projectRef.current, (updated) => {
+              projectRef.current = updated;
+              onUpdateProject(updated);
+            });
+            completedDescriptions.push(`✅ ${result}`);
+          } catch (err) {
+            const errMsg = err instanceof Error ? err.message : String(err);
+            completedDescriptions.push(`❌ Failed: ${errMsg}`);
+          }
+        }
+
+        setGeneratingTasks([]);
+
+        // Update the agent message to show completion
+        setMessages(prev => prev.map(m => {
+          if (m.id === agentMsg.id) {
+            return {
+              ...m,
+              generating: false,
+              text: m.text + '\n\n' + completedDescriptions.join('\n'),
+            };
+          }
+          return m;
+        }));
+      }
+
     } catch (err) {
       setMessages(prev => [
         ...prev,
@@ -574,12 +872,19 @@ export const AIAgent: React.FC<AIAgentProps> = ({
   };
 
   const renderText = (text: string) => {
-    const parts = text.split(/(\*\*[^*]+\*\*)/g);
-    return parts.map((part, i) => {
-      if (part.startsWith('**') && part.endsWith('**')) {
-        return <strong key={i} className="text-white font-semibold">{part.slice(2, -2)}</strong>;
-      }
-      return <span key={i}>{part}</span>;
+    return text.split('\n').map((line, lineIdx) => {
+      const parts = line.split(/(\*\*[^*]+\*\*)/g);
+      return (
+        <span key={lineIdx}>
+          {parts.map((part, i) => {
+            if (part.startsWith('**') && part.endsWith('**')) {
+              return <strong key={i} className="text-white font-semibold">{part.slice(2, -2)}</strong>;
+            }
+            return <span key={i}>{part}</span>;
+          })}
+          {lineIdx < text.split('\n').length - 1 && <br />}
+        </span>
+      );
     });
   };
 
@@ -589,8 +894,8 @@ export const AIAgent: React.FC<AIAgentProps> = ({
     <div
       className="fixed bottom-4 right-4 z-50 flex flex-col bg-neutral-900 border border-neutral-700 rounded-2xl shadow-2xl transition-all duration-300 overflow-hidden"
       style={{
-        width: '22rem',
-        height: isMinimized ? '3.5rem' : '38rem',
+        width: '24rem',
+        height: isMinimized ? '3.5rem' : '42rem',
         maxHeight: 'calc(100vh - 5rem)',
       }}
     >
@@ -607,30 +912,29 @@ export const AIAgent: React.FC<AIAgentProps> = ({
             <span className="text-white font-bold text-sm tracking-wide">SLOPBOT</span>
             <span className="text-neutral-500 text-xs ml-2">AI Director</span>
           </div>
-          <div className={`w-2 h-2 rounded-full ml-1 ${apiKeyMissing ? 'bg-yellow-500' : 'bg-green-500 animate-pulse'}`} />
+          <div className={`w-2 h-2 rounded-full ml-1 ${apiKeyMissing ? 'bg-yellow-500' : generatingTasks.length > 0 ? 'bg-blue-400 animate-pulse' : 'bg-green-500 animate-pulse'}`} />
+          {generatingTasks.length > 0 && (
+            <span className="text-blue-400 text-xs ml-1">Generating...</span>
+          )}
         </div>
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
           <button
-            onClick={e => { e.stopPropagation(); clearHistory(); }}
-            className="text-neutral-500 hover:text-neutral-300 transition-colors p-1 rounded"
+            onClick={clearHistory}
+            className="p-1.5 rounded-lg text-neutral-500 hover:text-white hover:bg-neutral-700 transition-colors"
             title="Clear chat"
           >
             <Trash2 size={13} />
           </button>
-          {isMinimized ? (
-            <ChevronUp size={15} className="text-neutral-400" />
-          ) : (
-            <ChevronDown size={15} className="text-neutral-400" />
-          )}
-          {onClose && (
-            <button
-              onClick={e => { e.stopPropagation(); onClose(); }}
-              className="text-neutral-500 hover:text-red-400 transition-colors p-1 rounded"
-              title="Close"
-            >
-              <X size={14} />
-            </button>
-          )}
+          <button
+            onClick={onClose}
+            className="p-1.5 rounded-lg text-neutral-500 hover:text-white hover:bg-neutral-700 transition-colors"
+            title="Close"
+          >
+            <X size={13} />
+          </button>
+          <button className="p-1.5 rounded-lg text-neutral-500 hover:text-white hover:bg-neutral-700 transition-colors">
+            {isMinimized ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+          </button>
         </div>
       </div>
 
@@ -638,64 +942,82 @@ export const AIAgent: React.FC<AIAgentProps> = ({
         <>
           {/* API key warning */}
           {apiKeyMissing && (
-            <div className="mx-3 mt-2 px-3 py-2 bg-yellow-900/30 border border-yellow-700/50 rounded-lg flex items-start gap-2">
-              <AlertCircle size={13} className="text-yellow-500 flex-shrink-0 mt-0.5" />
-              <p className="text-xs text-yellow-400">
-                No Gemini API key found. Add <code className="bg-neutral-800 px-1 rounded">GEMINI_API_KEY</code> to your <code className="bg-neutral-800 px-1 rounded">.env</code> file or enter it in Settings.
-              </p>
+            <div className="flex items-center gap-2 px-3 py-2 bg-yellow-900/30 border-b border-yellow-800/50 flex-shrink-0">
+              <AlertCircle size={12} className="text-yellow-400 flex-shrink-0" />
+              <span className="text-yellow-300 text-xs">No API key found. Add GEMINI_API_KEY to .env file.</span>
+            </div>
+          )}
+
+          {/* Active generation tasks */}
+          {generatingTasks.length > 0 && (
+            <div className="px-3 py-2 bg-blue-900/20 border-b border-blue-800/30 flex-shrink-0">
+              {generatingTasks.map((task, i) => (
+                <div key={i} className="flex items-center gap-2 text-xs text-blue-300">
+                  <Loader2 size={10} className="animate-spin flex-shrink-0" />
+                  <span>{task}</span>
+                </div>
+              ))}
             </div>
           )}
 
           {/* Messages */}
-          <div className="flex-1 overflow-y-auto px-3 py-3 space-y-3">
+          <div className="flex-1 overflow-y-auto px-3 py-3 space-y-3 min-h-0">
             {messages.map(msg => (
-              <div
-                key={msg.id}
-                className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} items-end gap-2`}
-              >
+              <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} gap-2`}>
                 {msg.role === 'agent' && (
-                  <div className="w-6 h-6 rounded-full bg-red-600 flex items-center justify-center flex-shrink-0 mb-0.5">
+                  <div className="w-6 h-6 rounded-full bg-red-600 flex items-center justify-center flex-shrink-0 mt-0.5">
                     <Bot size={11} className="text-white" />
                   </div>
                 )}
                 <div
-                  className={`max-w-[82%] rounded-2xl px-3 py-2 text-sm leading-relaxed ${
+                  className={`max-w-[85%] px-3 py-2 rounded-xl text-sm leading-relaxed ${
                     msg.role === 'user'
-                      ? 'bg-red-700 text-white rounded-br-sm'
+                      ? 'bg-red-600 text-white rounded-br-sm'
                       : msg.error
-                      ? 'bg-red-950/60 text-red-300 border border-red-800/50 rounded-bl-sm'
-                      : 'bg-neutral-800 text-neutral-300 rounded-bl-sm'
+                      ? 'bg-red-950 border border-red-800 text-red-300 rounded-bl-sm'
+                      : 'bg-neutral-800 text-neutral-200 rounded-bl-sm'
                   }`}
                 >
-                  <div className="whitespace-pre-wrap break-words">
-                    {msg.text.split('\n').map((line, i) => (
-                      <div key={i}>{renderText(line)}</div>
-                    ))}
-                  </div>
-                  {msg.actions && msg.actions.length > 0 && (
-                    <div className="mt-2 pt-2 border-t border-neutral-600/60 space-y-1">
-                      {msg.actions.map((action, i) => (
-                        <div key={i} className="flex items-center gap-1.5 text-xs text-green-400">
-                          <Sparkles size={10} className="flex-shrink-0" />
-                          <span>{action.description}</span>
-                        </div>
-                      ))}
+                  <div>{renderText(msg.text)}</div>
+
+                  {/* Action badges */}
+                  {msg.actions && msg.actions.length > 0 && !msg.generating && (
+                    <div className="mt-2 space-y-1">
+                      {msg.actions
+                        .filter(a => !['NAVIGATE'].includes(a.type))
+                        .map((a, i) => (
+                          <div key={i} className="flex items-center gap-1.5">
+                            <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
+                              a.type.startsWith('GENERATE') ? 'bg-blue-400' : 'bg-green-400'
+                            }`} />
+                            <span className="text-xs text-neutral-400">{a.description}</span>
+                          </div>
+                        ))}
+                    </div>
+                  )}
+
+                  {/* Generating spinner */}
+                  {msg.generating && (
+                    <div className="mt-2 flex items-center gap-2 text-blue-400">
+                      <Loader2 size={11} className="animate-spin" />
+                      <span className="text-xs">Generating visuals...</span>
                     </div>
                   )}
                 </div>
               </div>
             ))}
 
+            {/* Loading indicator */}
             {isLoading && (
-              <div className="flex justify-start items-end gap-2">
+              <div className="flex justify-start gap-2">
                 <div className="w-6 h-6 rounded-full bg-red-600 flex items-center justify-center flex-shrink-0">
                   <Bot size={11} className="text-white" />
                 </div>
-                <div className="bg-neutral-800 rounded-2xl rounded-bl-sm px-4 py-3">
-                  <div className="flex items-center gap-1.5">
-                    <div className="w-1.5 h-1.5 bg-neutral-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-                    <div className="w-1.5 h-1.5 bg-neutral-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-                    <div className="w-1.5 h-1.5 bg-neutral-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                <div className="bg-neutral-800 rounded-xl rounded-bl-sm px-3 py-2">
+                  <div className="flex gap-1 items-center h-4">
+                    <div className="w-1.5 h-1.5 bg-neutral-500 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                    <div className="w-1.5 h-1.5 bg-neutral-500 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                    <div className="w-1.5 h-1.5 bg-neutral-500 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
                   </div>
                 </div>
               </div>
@@ -704,49 +1026,47 @@ export const AIAgent: React.FC<AIAgentProps> = ({
           </div>
 
           {/* Quick actions */}
-          <div className="px-3 pb-2 flex gap-1.5 flex-wrap">
-            {QUICK_ACTIONS.map(q => (
-              <button
-                key={q}
-                onClick={() => { setInput(q); setTimeout(() => inputRef.current?.focus(), 50); }}
-                className="text-xs bg-neutral-800 hover:bg-neutral-700 text-neutral-400 hover:text-white px-2 py-1 rounded-full border border-neutral-700 transition-colors"
-              >
-                {q}
-              </button>
-            ))}
+          <div className="px-3 py-2 border-t border-neutral-800 flex-shrink-0">
+            <div className="flex flex-wrap gap-1.5 max-h-20 overflow-y-auto">
+              {QUICK_ACTIONS.map((qa, i) => (
+                <button
+                  key={i}
+                  onClick={() => handleSend(qa.label)}
+                  disabled={isLoading}
+                  className="text-xs px-2.5 py-1 rounded-full bg-neutral-800 hover:bg-neutral-700 text-neutral-300 hover:text-white border border-neutral-700 hover:border-neutral-600 transition-all disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+                >
+                  {qa.icon} {qa.label}
+                </button>
+              ))}
+            </div>
           </div>
 
           {/* Input */}
-          <div className="px-3 pb-3 pt-1 border-t border-neutral-700 flex-shrink-0">
-            <div className="flex items-end gap-2 bg-neutral-800 rounded-xl px-3 py-2 border border-neutral-600 focus-within:border-red-600 transition-colors">
+          <div className="px-3 pb-3 pt-1 flex-shrink-0">
+            <div className="flex gap-2 items-end bg-neutral-800 rounded-xl border border-neutral-700 focus-within:border-red-600 transition-colors px-3 py-2">
               <textarea
                 ref={inputRef}
                 value={input}
                 onChange={e => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
                 placeholder="Tell SLOPBOT what to do..."
-                className="flex-1 bg-transparent text-white text-sm resize-none outline-none placeholder-neutral-500 max-h-24"
                 rows={1}
                 disabled={isLoading}
+                className="flex-1 bg-transparent text-white text-sm placeholder-neutral-500 resize-none outline-none leading-5 max-h-24 overflow-y-auto disabled:opacity-50"
+                style={{ minHeight: '1.25rem' }}
               />
               <button
-                onClick={handleSend}
+                onClick={() => handleSend()}
                 disabled={isLoading || !input.trim()}
-                className="w-7 h-7 rounded-lg bg-red-600 hover:bg-red-500 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center transition-colors flex-shrink-0"
+                className="p-1 rounded-lg bg-red-600 hover:bg-red-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex-shrink-0"
               >
-                {isLoading ? (
-                  <Loader2 size={13} className="text-white animate-spin" />
-                ) : (
-                  <Send size={13} className="text-white" />
-                )}
+                {isLoading ? <Loader2 size={14} className="text-white animate-spin" /> : <Send size={14} className="text-white" />}
               </button>
             </div>
-            <p className="text-xs text-neutral-600 mt-1 text-center">Enter to send · Shift+Enter for newline</p>
+            <p className="text-neutral-600 text-xs mt-1 text-center">Enter to send · Shift+Enter for newline</p>
           </div>
         </>
       )}
     </div>
   );
 };
-
-export default AIAgent;

@@ -1,10 +1,10 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { Project, Shot, Scene } from '../../types';
 import {
   Play, Pause, SkipBack, SkipForward, ZoomIn, ZoomOut,
   Scissors, Lock, Unlock, Eye, EyeOff, Plus, Trash2,
-  ChevronRight, ChevronDown, Film, Music, Layers, Volume2, VolumeX,
-  Copy, Monitor, Info, Maximize2
+  Volume2, VolumeX, Film, Music, Layers, ChevronLeft,
+  ChevronRight, Maximize2, Download, RefreshCw, FastForward, Rewind
 } from 'lucide-react';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -21,6 +21,7 @@ interface TimelineClip {
   label: string;
   color: string;
   imageUrl?: string;
+  videoUrl?: string;
   locked: boolean;
   muted: boolean;
 }
@@ -32,22 +33,8 @@ interface TimelineTrack {
   locked: boolean;
   muted: boolean;
   visible: boolean;
-  collapsed: boolean;
   color: string;
   height: number;
-}
-
-interface TimelineState {
-  tracks: TimelineTrack[];
-  clips: TimelineClip[];
-  playheadFrame: number;
-  totalFrames: number;
-  fps: number;
-  zoom: number;
-  isPlaying: boolean;
-  selectedClipIds: string[];
-  inPoint: number | null;
-  outPoint: number | null;
 }
 
 interface TimelineEditorProps {
@@ -56,17 +43,21 @@ interface TimelineEditorProps {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Helpers
+// Constants
 // ─────────────────────────────────────────────────────────────────────────────
 
+const FPS = 30;
+const DEFAULT_SHOT_DURATION = 150; // 5 seconds at 30fps
+const TRACK_HEADER_WIDTH = 180;
+const RULER_HEIGHT = 28;
 const SHOT_COLORS = [
   '#dc2626', '#ea580c', '#ca8a04', '#16a34a',
   '#0891b2', '#7c3aed', '#db2777', '#475569',
 ];
 
-const DEFAULT_SHOT_DURATION = 150; // 5 seconds at 30fps
-const RULER_HEIGHT = 30;
-const TRACK_HEADER_WIDTH = 200;
+// ─────────────────────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────────────────────
 
 function framesToTimecode(frames: number, fps: number): string {
   const totalSeconds = Math.floor(frames / fps);
@@ -77,743 +68,799 @@ function framesToTimecode(frames: number, fps: number): string {
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}:${String(f).padStart(2, '0')}`;
 }
 
-function buildInitialTimeline(project: Project): TimelineState {
-  const tracks: TimelineTrack[] = [
-    { id: 'v1', name: 'Video 1', type: 'video', locked: false, muted: false, visible: true, collapsed: false, color: '#dc2626', height: 72 },
-    { id: 'v2', name: 'Video 2', type: 'video', locked: false, muted: false, visible: true, collapsed: false, color: '#ea580c', height: 72 },
-    { id: 'a1', name: 'Audio 1', type: 'audio', locked: false, muted: false, visible: true, collapsed: false, color: '#16a34a', height: 48 },
-    { id: 'a2', name: 'Audio 2', type: 'audio', locked: false, muted: false, visible: true, collapsed: false, color: '#0891b2', height: 48 },
-    { id: 'ol', name: 'Overlays', type: 'overlay', locked: false, muted: false, visible: true, collapsed: false, color: '#7c3aed', height: 40 },
-  ];
-
+function buildInitialClips(project: Project): { clips: TimelineClip[]; totalFrames: number } {
   const clips: TimelineClip[] = [];
   let cursor = 0;
   let colorIdx = 0;
 
   for (const scene of project.scenes ?? []) {
     for (const shot of scene.shots ?? []) {
+      const dur = shot.videoUrl ? DEFAULT_SHOT_DURATION : DEFAULT_SHOT_DURATION;
       clips.push({
         id: `clip-${shot.id}`,
         shotId: shot.id,
         sceneId: scene.id,
         trackId: 'v1',
         startFrame: cursor,
-        durationFrames: DEFAULT_SHOT_DURATION,
+        durationFrames: dur,
         label: `${scene.name} · Shot ${shot.number}`,
         color: SHOT_COLORS[colorIdx % SHOT_COLORS.length],
         imageUrl: shot.imageUrl,
+        videoUrl: shot.videoUrl,
         locked: false,
         muted: false,
       });
-      cursor += DEFAULT_SHOT_DURATION + 5;
+      cursor += dur;
       colorIdx++;
     }
   }
 
-  const totalFrames = Math.max(cursor + DEFAULT_SHOT_DURATION * 2, 1800);
-
-  return {
-    tracks,
-    clips,
-    playheadFrame: 0,
-    totalFrames,
-    fps: 30,
-    zoom: 0.5,
-    isPlaying: false,
-    selectedClipIds: [],
-    inPoint: null,
-    outPoint: null,
-  };
+  return { clips, totalFrames: Math.max(cursor + DEFAULT_SHOT_DURATION * 2, FPS * 60) };
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Track Header Sub-component
-// ─────────────────────────────────────────────────────────────────────────────
-
-const TrackHeader: React.FC<{
-  track: TimelineTrack;
-  onToggleLock: () => void;
-  onToggleMute: () => void;
-  onToggleVisible: () => void;
-  onToggleCollapse: () => void;
-  onDelete: () => void;
-}> = ({ track, onToggleLock, onToggleMute, onToggleVisible, onToggleCollapse, onDelete }) => (
-  <div
-    className="flex items-center gap-1.5 px-2 border-b border-neutral-800 bg-neutral-900 select-none"
-    style={{ height: track.collapsed ? 32 : track.height, minHeight: 32 }}
-  >
-    <button onClick={onToggleCollapse} className="text-neutral-500 hover:text-white transition-colors flex-shrink-0">
-      {track.collapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
-    </button>
-    <div className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: track.color }} />
-    <span className="text-xs text-neutral-200 font-medium flex-1 truncate">{track.name}</span>
-    <div className="flex items-center gap-0.5 flex-shrink-0">
-      <button
-        onClick={onToggleLock}
-        className={`p-1 rounded transition-colors ${track.locked ? 'text-yellow-400' : 'text-neutral-600 hover:text-neutral-300'}`}
-        title={track.locked ? 'Unlock' : 'Lock'}
-      >
-        {track.locked ? <Lock size={11} /> : <Unlock size={11} />}
-      </button>
-      <button
-        onClick={onToggleMute}
-        className={`p-1 rounded transition-colors ${track.muted ? 'text-red-400' : 'text-neutral-600 hover:text-neutral-300'}`}
-        title={track.muted ? 'Unmute' : 'Mute'}
-      >
-        {track.muted ? <VolumeX size={11} /> : <Volume2 size={11} />}
-      </button>
-      <button
-        onClick={onToggleVisible}
-        className={`p-1 rounded transition-colors ${!track.visible ? 'text-neutral-700' : 'text-neutral-400 hover:text-white'}`}
-        title={track.visible ? 'Hide' : 'Show'}
-      >
-        {track.visible ? <Eye size={11} /> : <EyeOff size={11} />}
-      </button>
-      <button
-        onClick={onDelete}
-        className="p-1 rounded text-neutral-700 hover:text-red-400 transition-colors"
-        title="Delete track"
-      >
-        <Trash2 size={11} />
-      </button>
-    </div>
-  </div>
-);
+const DEFAULT_TRACKS: TimelineTrack[] = [
+  { id: 'v1', name: 'Video 1', type: 'video', locked: false, muted: false, visible: true, color: '#dc2626', height: 72 },
+  { id: 'v2', name: 'Video 2', type: 'video', locked: false, muted: false, visible: true, color: '#ea580c', height: 72 },
+  { id: 'a1', name: 'Audio 1', type: 'audio', locked: false, muted: false, visible: true, color: '#16a34a', height: 48 },
+  { id: 'a2', name: 'Audio 2', type: 'audio', locked: false, muted: false, visible: true, color: '#0891b2', height: 48 },
+  { id: 'ol', name: 'Overlays', type: 'overlay', locked: false, muted: false, visible: true, color: '#7c3aed', height: 40 },
+];
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Main Component
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const TimelineEditor: React.FC<TimelineEditorProps> = ({ project, onUpdateProject }) => {
-  const [tl, setTl] = useState<TimelineState>(() => buildInitialTimeline(project));
-  const [dragState, setDragState] = useState<{
-    clipId: string;
-    startX: number;
-    originalStart: number;
-    mode: 'move' | 'trim-left' | 'trim-right';
-  } | null>(null);
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; clipId: string } | null>(null);
-  const [monitorFullscreen, setMonitorFullscreen] = useState(false);
-  const timelineBodyRef = useRef<HTMLDivElement>(null);
-  const rulerRef = useRef<HTMLDivElement>(null);
-  const playIntervalRef = useRef<number | null>(null);
+  const { clips: initialClips, totalFrames: initialTotal } = useMemo(() => buildInitialClips(project), [project.scenes]);
 
-  // Sync clips when project shots change
+  const [tracks, setTracks] = useState<TimelineTrack[]>(DEFAULT_TRACKS);
+  const [clips, setClips] = useState<TimelineClip[]>(initialClips);
+  const [totalFrames, setTotalFrames] = useState(initialTotal);
+  const [playheadFrame, setPlayheadFrame] = useState(0);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [zoom, setZoom] = useState(1);
+  const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
+  const [inPoint, setInPoint] = useState<number | null>(null);
+  const [outPoint, setOutPoint] = useState<number | null>(null);
+  const [isDraggingPlayhead, setIsDraggingPlayhead] = useState(false);
+  const [isDraggingClip, setIsDraggingClip] = useState<{ clipId: string; offsetFrames: number } | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; clipId: string } | null>(null);
+  const [volume, setVolume] = useState(1);
+  const [isMuted, setIsMuted] = useState(false);
+
+  const playIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const rulerRef = useRef<HTMLDivElement>(null);
+  const tracksScrollRef = useRef<HTMLDivElement>(null);
+  const rulerScrollRef = useRef<HTMLDivElement>(null);
+
+  // Sync clips when project changes (new shots added)
   useEffect(() => {
-    setTl(prev => {
-      const newState = buildInitialTimeline(project);
-      return {
-        ...newState,
-        zoom: prev.zoom,
-        playheadFrame: prev.playheadFrame,
-        tracks: prev.tracks,
-      };
+    const { clips: newClips, totalFrames: newTotal } = buildInitialClips(project);
+    setClips(prev => {
+      // Merge: keep existing clips with their positions, add new ones
+      const existingIds = new Set(prev.map(c => c.shotId));
+      const brandNew = newClips.filter(c => !existingIds.has(c.shotId));
+      // Update imageUrl/videoUrl for existing clips
+      const updated = prev.map(c => {
+        const fresh = newClips.find(nc => nc.shotId === c.shotId);
+        return fresh ? { ...c, imageUrl: fresh.imageUrl, videoUrl: fresh.videoUrl, label: fresh.label } : c;
+      });
+      return [...updated, ...brandNew];
     });
+    setTotalFrames(t => Math.max(t, newTotal));
   }, [project.scenes]);
 
-  // Playback interval
+  // Playback
   useEffect(() => {
-    if (tl.isPlaying) {
-      playIntervalRef.current = window.setInterval(() => {
-        setTl(prev => {
-          if (prev.playheadFrame >= prev.totalFrames) {
-            return { ...prev, isPlaying: false, playheadFrame: 0 };
+    if (isPlaying) {
+      playIntervalRef.current = setInterval(() => {
+        setPlayheadFrame(f => {
+          if (f >= totalFrames - 1) {
+            setIsPlaying(false);
+            return 0;
           }
-          return { ...prev, playheadFrame: prev.playheadFrame + 1 };
+          return f + 1;
         });
-      }, 1000 / tl.fps);
+      }, 1000 / FPS);
     } else {
-      if (playIntervalRef.current) {
-        clearInterval(playIntervalRef.current);
-        playIntervalRef.current = null;
+      if (playIntervalRef.current) clearInterval(playIntervalRef.current);
+    }
+    return () => { if (playIntervalRef.current) clearInterval(playIntervalRef.current); };
+  }, [isPlaying, totalFrames]);
+
+  // Sync video element to playhead
+  useEffect(() => {
+    const clip = getClipAtPlayhead();
+    if (clip?.videoUrl && videoRef.current) {
+      const clipTime = (playheadFrame - clip.startFrame) / FPS;
+      if (Math.abs(videoRef.current.currentTime - clipTime) > 0.1) {
+        videoRef.current.currentTime = clipTime;
+      }
+      if (isPlaying && videoRef.current.paused) {
+        videoRef.current.play().catch(() => {});
+      } else if (!isPlaying && !videoRef.current.paused) {
+        videoRef.current.pause();
       }
     }
+  }, [playheadFrame, isPlaying]);
+
+  // Sync ruler scroll with tracks scroll
+  useEffect(() => {
+    const tracks = tracksScrollRef.current;
+    const ruler = rulerScrollRef.current;
+    if (!tracks || !ruler) return;
+    const onTracksScroll = () => { ruler.scrollLeft = tracks.scrollLeft; };
+    const onRulerScroll = () => { tracks.scrollLeft = ruler.scrollLeft; };
+    tracks.addEventListener('scroll', onTracksScroll);
+    ruler.addEventListener('scroll', onRulerScroll);
     return () => {
-      if (playIntervalRef.current) clearInterval(playIntervalRef.current);
+      tracks.removeEventListener('scroll', onTracksScroll);
+      ruler.removeEventListener('scroll', onRulerScroll);
     };
-  }, [tl.isPlaying, tl.fps]);
+  }, []);
 
   // Keyboard shortcuts
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-      if (e.key === ' ') { e.preventDefault(); togglePlay(); }
-      if (e.key === '+' || e.key === '=') zoomIn();
-      if (e.key === '-') zoomOut();
-      if (e.key === 'ArrowLeft') stepBack();
-      if (e.key === 'ArrowRight') stepForward();
-      if (e.key === 'Home') goToStart();
-      if (e.key === 'End') goToEnd();
+      if (e.key === ' ') { e.preventDefault(); setIsPlaying(v => !v); }
+      if (e.key === 'ArrowLeft') { e.preventDefault(); setPlayheadFrame(f => Math.max(0, f - (e.shiftKey ? FPS : 1))); }
+      if (e.key === 'ArrowRight') { e.preventDefault(); setPlayheadFrame(f => Math.min(totalFrames - 1, f + (e.shiftKey ? FPS : 1))); }
+      if (e.key === '+' || e.key === '=') setZoom(z => Math.min(8, z * 1.25));
+      if (e.key === '-') setZoom(z => Math.max(0.25, z / 1.25));
+      if (e.key === 'i') setInPoint(playheadFrame);
+      if (e.key === 'o') setOutPoint(playheadFrame);
+      if (e.key === 'Escape') { setSelectedClipId(null); setContextMenu(null); }
     };
     window.addEventListener('keydown', handleKey);
     return () => window.removeEventListener('keydown', handleKey);
-  }, []);
+  }, [totalFrames, playheadFrame]);
 
-  const pxPerFrame = tl.zoom * 10;
-  const totalWidth = tl.totalFrames * pxPerFrame;
+  // ── Derived state ────────────────────────────────────────────────────────
 
-  // Ruler rendering
-  const renderRuler = () => {
-    const marks = [];
-    const minPixelsBetweenMarks = 60;
-    const framesPerMark = Math.ceil(minPixelsBetweenMarks / pxPerFrame / tl.fps) * tl.fps;
-    for (let f = 0; f <= tl.totalFrames; f += framesPerMark) {
-      marks.push(
-        <div
-          key={f}
-          className="absolute top-0 flex flex-col items-start"
-          style={{ left: f * pxPerFrame }}
-        >
-          <div className="h-full w-px bg-neutral-600" />
-          <span className="text-[9px] text-neutral-500 ml-1 absolute top-1 whitespace-nowrap">
-            {framesToTimecode(f, tl.fps)}
-          </span>
-        </div>
-      );
+  const pxPerFrame = zoom * 2; // base: 2px per frame at zoom=1
+
+  const getClipAtPlayhead = useCallback((): TimelineClip | null => {
+    return clips.find(c => {
+      const track = tracks.find(t => t.id === c.trackId);
+      if (!track?.visible || c.muted) return false;
+      return playheadFrame >= c.startFrame && playheadFrame < c.startFrame + c.durationFrames;
+    }) ?? null;
+  }, [clips, tracks, playheadFrame]);
+
+  const currentClip = getClipAtPlayhead();
+  const selectedClip = clips.find(c => c.id === selectedClipId) ?? null;
+
+  // ── Ruler rendering ──────────────────────────────────────────────────────
+
+  const rulerMarks = useMemo(() => {
+    const marks: { frame: number; label: string; major: boolean }[] = [];
+    // Determine interval based on zoom
+    const minPxBetweenMarks = 60;
+    const framesPerMark = Math.max(1, Math.ceil(minPxBetweenMarks / pxPerFrame / FPS) * FPS);
+    for (let f = 0; f <= totalFrames; f += framesPerMark) {
+      const totalSec = Math.floor(f / FPS);
+      const m = Math.floor(totalSec / 60);
+      const s = totalSec % 60;
+      marks.push({
+        frame: f,
+        label: `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`,
+        major: true,
+      });
     }
     return marks;
+  }, [totalFrames, pxPerFrame]);
+
+  // ── Playhead drag ────────────────────────────────────────────────────────
+
+  const handleRulerMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    setIsDraggingPlayhead(true);
+    setIsPlaying(false);
+    const rect = e.currentTarget.getBoundingClientRect();
+    const scrollLeft = rulerScrollRef.current?.scrollLeft ?? 0;
+    const x = e.clientX - rect.left + scrollLeft - TRACK_HEADER_WIDTH;
+    setPlayheadFrame(Math.max(0, Math.min(totalFrames - 1, Math.round(x / pxPerFrame))));
   };
 
-  // Drag handlers
-  const handleClipMouseDown = useCallback((e: React.MouseEvent, clipId: string, mode: 'move' | 'trim-left' | 'trim-right') => {
+  useEffect(() => {
+    if (!isDraggingPlayhead) return;
+    const onMove = (e: MouseEvent) => {
+      const ruler = rulerRef.current;
+      if (!ruler) return;
+      const rect = ruler.getBoundingClientRect();
+      const scrollLeft = rulerScrollRef.current?.scrollLeft ?? 0;
+      const x = e.clientX - rect.left + scrollLeft - TRACK_HEADER_WIDTH;
+      setPlayheadFrame(Math.max(0, Math.min(totalFrames - 1, Math.round(x / pxPerFrame))));
+    };
+    const onUp = () => setIsDraggingPlayhead(false);
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
+  }, [isDraggingPlayhead, pxPerFrame, totalFrames]);
+
+  // ── Clip drag ────────────────────────────────────────────────────────────
+
+  const handleClipMouseDown = (e: React.MouseEvent, clip: TimelineClip) => {
+    if (e.button !== 0) return;
     e.stopPropagation();
-    const clip = tl.clips.find(c => c.id === clipId);
-    if (!clip || clip.locked) return;
-    setDragState({ clipId, startX: e.clientX, originalStart: clip.startFrame, mode });
-    setTl(prev => ({ ...prev, selectedClipIds: [clipId] }));
-  }, [tl.clips]);
-
-  const handleMouseMove = useCallback((e: React.MouseEvent) => {
-    if (!dragState) return;
-    const dx = e.clientX - dragState.startX;
-    const frameDelta = Math.round(dx / pxPerFrame);
-    setTl(prev => ({
-      ...prev,
-      clips: prev.clips.map(c => {
-        if (c.id !== dragState.clipId) return c;
-        if (dragState.mode === 'move') {
-          return { ...c, startFrame: Math.max(0, dragState.originalStart + frameDelta) };
-        }
-        if (dragState.mode === 'trim-left') {
-          const newStart = Math.max(0, dragState.originalStart + frameDelta);
-          const diff = newStart - c.startFrame;
-          return { ...c, startFrame: newStart, durationFrames: Math.max(15, c.durationFrames - diff) };
-        }
-        if (dragState.mode === 'trim-right') {
-          return { ...c, durationFrames: Math.max(15, c.durationFrames + frameDelta) };
-        }
-        return c;
-      }),
-    }));
-  }, [dragState, pxPerFrame]);
-
-  const handleMouseUp = useCallback(() => setDragState(null), []);
-
-  const handleRulerClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    const rect = e.currentTarget.getBoundingClientRect();
-    const x = e.clientX - rect.left + (e.currentTarget.scrollLeft ?? 0);
-    const frame = Math.round(x / pxPerFrame);
-    setTl(prev => ({ ...prev, playheadFrame: Math.max(0, Math.min(frame, prev.totalFrames)) }));
+    setSelectedClipId(clip.id);
+    if (clip.locked) return;
+    const offsetPx = e.clientX - (clip.startFrame * pxPerFrame);
+    setIsDraggingClip({ clipId: clip.id, offsetFrames: Math.round(offsetPx / pxPerFrame) });
   };
 
-  const handleTrackBodyClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (dragState) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    const scrollLeft = timelineBodyRef.current?.scrollLeft ?? 0;
-    const x = e.clientX - rect.left + scrollLeft;
-    const frame = Math.round(x / pxPerFrame);
-    setTl(prev => ({ ...prev, playheadFrame: Math.max(0, Math.min(frame, prev.totalFrames)) }));
-  };
+  useEffect(() => {
+    if (!isDraggingClip) return;
+    const onMove = (e: MouseEvent) => {
+      const tracksEl = tracksScrollRef.current;
+      if (!tracksEl) return;
+      const rect = tracksEl.getBoundingClientRect();
+      const scrollLeft = tracksEl.scrollLeft;
+      const x = e.clientX - rect.left + scrollLeft - TRACK_HEADER_WIDTH;
+      const newStart = Math.max(0, Math.round(x / pxPerFrame) - isDraggingClip.offsetFrames);
+      setClips(prev => prev.map(c => c.id === isDraggingClip.clipId ? { ...c, startFrame: newStart } : c));
+    };
+    const onUp = () => setIsDraggingClip(null);
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
+  }, [isDraggingClip, pxPerFrame]);
+
+  // ── Context menu ─────────────────────────────────────────────────────────
 
   const handleClipContextMenu = (e: React.MouseEvent, clipId: string) => {
     e.preventDefault();
+    e.stopPropagation();
     setContextMenu({ x: e.clientX, y: e.clientY, clipId });
   };
 
   const deleteClip = (clipId: string) => {
-    setTl(prev => ({ ...prev, clips: prev.clips.filter(c => c.id !== clipId), selectedClipIds: [] }));
+    setClips(prev => prev.filter(c => c.id !== clipId));
     setContextMenu(null);
   };
 
   const duplicateClip = (clipId: string) => {
-    const clip = tl.clips.find(c => c.id === clipId);
+    const clip = clips.find(c => c.id === clipId);
     if (!clip) return;
-    setTl(prev => ({ ...prev, clips: [...prev.clips, { ...clip, id: crypto.randomUUID(), startFrame: clip.startFrame + clip.durationFrames + 5 }] }));
+    const newClip: TimelineClip = {
+      ...clip,
+      id: crypto.randomUUID(),
+      startFrame: clip.startFrame + clip.durationFrames,
+    };
+    setClips(prev => [...prev, newClip]);
     setContextMenu(null);
   };
 
   const splitClip = (clipId: string) => {
-    const clip = tl.clips.find(c => c.id === clipId);
-    if (!clip) return;
-    const sp = tl.playheadFrame;
-    if (sp <= clip.startFrame || sp >= clip.startFrame + clip.durationFrames) return;
-    const left = { ...clip, durationFrames: sp - clip.startFrame };
-    const right = { ...clip, id: crypto.randomUUID(), startFrame: sp, durationFrames: clip.durationFrames - (sp - clip.startFrame) };
-    setTl(prev => ({ ...prev, clips: prev.clips.map(c => c.id === clipId ? left : c).concat(right) }));
+    const clip = clips.find(c => c.id === clipId);
+    if (!clip || playheadFrame <= clip.startFrame || playheadFrame >= clip.startFrame + clip.durationFrames) return;
+    const splitPoint = playheadFrame - clip.startFrame;
+    const left: TimelineClip = { ...clip, durationFrames: splitPoint };
+    const right: TimelineClip = { ...clip, id: crypto.randomUUID(), startFrame: playheadFrame, durationFrames: clip.durationFrames - splitPoint };
+    setClips(prev => prev.map(c => c.id === clipId ? left : c).concat(right));
     setContextMenu(null);
   };
 
-  const addTrack = (type: 'video' | 'audio' | 'overlay') => {
-    const count = tl.tracks.filter(t => t.type === type).length + 1;
-    const colors = { video: '#dc2626', audio: '#16a34a', overlay: '#7c3aed' };
-    const heights = { video: 72, audio: 48, overlay: 40 };
-    setTl(prev => ({
-      ...prev,
-      tracks: [...prev.tracks, {
-        id: crypto.randomUUID(),
-        name: `${type.charAt(0).toUpperCase() + type.slice(1)} ${count}`,
-        type, locked: false, muted: false, visible: true, collapsed: false,
-        color: colors[type], height: heights[type],
-      }],
-    }));
+  // ── Track controls ────────────────────────────────────────────────────────
+
+  const toggleTrackProp = (trackId: string, prop: 'locked' | 'muted' | 'visible') => {
+    setTracks(prev => prev.map(t => t.id === trackId ? { ...t, [prop]: !t[prop] } : t));
   };
 
-  const updateTrack = (trackId: string, patch: Partial<TimelineTrack>) => {
-    setTl(prev => ({ ...prev, tracks: prev.tracks.map(t => t.id === trackId ? { ...t, ...patch } : t) }));
+  const addTrack = (type: 'video' | 'audio' | 'overlay') => {
+    const count = tracks.filter(t => t.type === type).length + 1;
+    const colors = { video: '#dc2626', audio: '#16a34a', overlay: '#7c3aed' };
+    const heights = { video: 72, audio: 48, overlay: 40 };
+    const prefixes = { video: 'Video', audio: 'Audio', overlay: 'Overlay' };
+    setTracks(prev => [...prev, {
+      id: crypto.randomUUID(),
+      name: `${prefixes[type]} ${count}`,
+      type,
+      locked: false,
+      muted: false,
+      visible: true,
+      color: colors[type],
+      height: heights[type],
+    }]);
   };
 
   const deleteTrack = (trackId: string) => {
-    setTl(prev => ({ ...prev, tracks: prev.tracks.filter(t => t.id !== trackId), clips: prev.clips.filter(c => c.trackId !== trackId) }));
+    if (tracks.length <= 1) return;
+    setTracks(prev => prev.filter(t => t.id !== trackId));
+    setClips(prev => prev.filter(c => c.trackId !== trackId));
   };
 
-  const togglePlay = () => setTl(prev => ({ ...prev, isPlaying: !prev.isPlaying }));
-  const goToStart = () => setTl(prev => ({ ...prev, playheadFrame: 0, isPlaying: false }));
-  const goToEnd = () => setTl(prev => ({ ...prev, playheadFrame: prev.totalFrames, isPlaying: false }));
-  const stepBack = () => setTl(prev => ({ ...prev, playheadFrame: Math.max(0, prev.playheadFrame - 1) }));
-  const stepForward = () => setTl(prev => ({ ...prev, playheadFrame: Math.min(prev.totalFrames, prev.playheadFrame + 1) }));
-  const zoomIn = () => setTl(prev => ({ ...prev, zoom: Math.min(prev.zoom * 1.5, 8) }));
-  const zoomOut = () => setTl(prev => ({ ...prev, zoom: Math.max(prev.zoom / 1.5, 0.05) }));
+  // ── Playhead pixel position ───────────────────────────────────────────────
 
-  // Current frame image
-  const currentClip = tl.clips
-    .filter(c => {
-      const track = tl.tracks.find(t => t.id === c.trackId);
-      return track?.visible && !track?.muted && c.startFrame <= tl.playheadFrame && c.startFrame + c.durationFrames > tl.playheadFrame;
-    })
-    .sort((a, b) => tl.tracks.findIndex(t => t.id === a.trackId) - tl.tracks.findIndex(t => t.id === b.trackId))[0];
+  const playheadPx = playheadFrame * pxPerFrame;
 
-  const selectedClip = tl.selectedClipIds.length === 1
-    ? tl.clips.find(c => c.id === tl.selectedClipIds[0])
-    : null;
+  // ── Total timeline width ──────────────────────────────────────────────────
 
-  // Sync timeline scroll with ruler scroll
-  const syncScroll = (e: React.UIEvent<HTMLDivElement>) => {
-    if (rulerRef.current) {
-      rulerRef.current.scrollLeft = (e.target as HTMLDivElement).scrollLeft;
-    }
-  };
+  const timelineWidth = totalFrames * pxPerFrame;
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Render
+  // ─────────────────────────────────────────────────────────────────────────
 
   return (
     <div
-      className="flex flex-col bg-neutral-950 text-white select-none h-full overflow-hidden"
-      onMouseMove={handleMouseMove}
-      onMouseUp={handleMouseUp}
-      onMouseLeave={handleMouseUp}
-      onClick={() => contextMenu && setContextMenu(null)}
+      className="flex flex-col bg-neutral-950 text-white select-none"
+      style={{ height: 'calc(100vh - 48px)' }}
+      onClick={() => setContextMenu(null)}
     >
-      {/* ── TOP SECTION: Program Monitor + Inspector ── */}
-      <div className="flex flex-shrink-0 border-b-2 border-neutral-800" style={{ height: '42%', minHeight: 260 }}>
+      {/* ═══════════════════════════════════════════════════════════════════
+          TOP ROW: Program Monitor + Inspector
+      ═══════════════════════════════════════════════════════════════════ */}
+      <div className="flex flex-row flex-shrink-0" style={{ height: '45%', minHeight: 280 }}>
 
-        {/* Program Monitor */}
-        <div className="flex-1 flex flex-col bg-black min-w-0 border-r border-neutral-800">
+        {/* ── Program Monitor ── */}
+        <div className="flex-1 flex flex-col bg-black border-r border-neutral-800 min-w-0">
           {/* Monitor header */}
           <div className="flex items-center justify-between px-3 py-1.5 bg-neutral-900 border-b border-neutral-800 flex-shrink-0">
+            <span className="text-xs text-neutral-400 font-medium uppercase tracking-wider">Program Monitor</span>
             <div className="flex items-center gap-2">
-              <Monitor size={13} className="text-neutral-400" />
-              <span className="text-xs font-semibold text-neutral-300 uppercase tracking-wider">Program Monitor</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="font-mono text-xs text-green-400 bg-black px-2 py-0.5 rounded border border-neutral-700">
-                {framesToTimecode(tl.playheadFrame, tl.fps)}
+              <span className="text-xs text-neutral-500">
+                {currentClip ? currentClip.label : 'No clip at playhead'}
               </span>
-              <button
-                onClick={() => setMonitorFullscreen(v => !v)}
-                className="p-1 text-neutral-500 hover:text-white transition-colors rounded"
-                title="Toggle fullscreen monitor"
-              >
-                <Maximize2 size={12} />
+              <button className="p-1 hover:bg-neutral-700 rounded" title="Fullscreen">
+                <Maximize2 size={12} className="text-neutral-500" />
               </button>
             </div>
           </div>
 
           {/* Monitor screen */}
           <div className="flex-1 relative bg-black flex items-center justify-center overflow-hidden">
-            {currentClip?.imageUrl ? (
+            {currentClip?.videoUrl ? (
+              <video
+                ref={videoRef}
+                src={currentClip.videoUrl}
+                className="max-w-full max-h-full object-contain"
+                muted={isMuted}
+                style={{ volume } as React.CSSProperties}
+                playsInline
+              />
+            ) : currentClip?.imageUrl ? (
               <img
                 src={currentClip.imageUrl}
-                alt="Program Monitor"
+                alt={currentClip.label}
                 className="max-w-full max-h-full object-contain"
-                style={{ imageRendering: 'auto' }}
                 draggable={false}
               />
             ) : (
               <div className="flex flex-col items-center gap-3 text-neutral-700">
                 <Film size={48} strokeWidth={1} />
-                <div className="text-center">
-                  <div className="text-sm font-medium text-neutral-600">No frame at playhead</div>
-                  <div className="text-xs text-neutral-700 mt-1">
-                    {tl.clips.length === 0
-                      ? 'Add shots to your storyboard to see them here'
-                      : 'Move the playhead over a clip to preview it'}
-                  </div>
-                </div>
+                <span className="text-sm">
+                  {clips.length === 0
+                    ? 'No clips on timeline — generate shots in the Storyboard tab'
+                    : 'Move playhead over a clip to preview'}
+                </span>
               </div>
             )}
 
-            {/* Safe area overlay (subtle) */}
-            <div className="absolute inset-0 pointer-events-none" style={{
-              boxShadow: 'inset 0 0 0 2px rgba(255,255,255,0.03)'
-            }} />
-
             {/* Timecode burn-in */}
-            <div className="absolute bottom-3 left-1/2 -translate-x-1/2 font-mono text-xs text-white/70 bg-black/60 px-3 py-1 rounded tracking-widest">
-              {framesToTimecode(tl.playheadFrame, tl.fps)}
+            <div className="absolute bottom-3 left-1/2 -translate-x-1/2 bg-black/70 px-3 py-1 rounded font-mono text-sm text-white tracking-widest">
+              {framesToTimecode(playheadFrame, FPS)}
             </div>
 
-            {/* Clip label */}
-            {currentClip && (
-              <div className="absolute top-3 left-3 text-xs text-white/60 bg-black/50 px-2 py-0.5 rounded">
-                {currentClip.label}
+            {/* In/Out point overlays */}
+            {inPoint !== null && (
+              <div className="absolute top-2 left-2 bg-yellow-600/80 text-white text-xs px-2 py-0.5 rounded font-mono">
+                IN: {framesToTimecode(inPoint, FPS)}
+              </div>
+            )}
+            {outPoint !== null && (
+              <div className="absolute top-2 right-2 bg-yellow-600/80 text-white text-xs px-2 py-0.5 rounded font-mono">
+                OUT: {framesToTimecode(outPoint, FPS)}
               </div>
             )}
           </div>
 
           {/* Transport controls */}
-          <div className="flex items-center justify-center gap-1 px-4 py-2 bg-neutral-900 border-t border-neutral-800 flex-shrink-0">
-            <button onClick={goToStart} className="p-2 hover:bg-neutral-700 rounded transition-colors text-neutral-300" title="Go to start (Home)">
-              <SkipBack size={16} />
+          <div className="flex items-center justify-center gap-2 px-4 py-2 bg-neutral-900 border-t border-neutral-800 flex-shrink-0">
+            {/* Volume */}
+            <div className="flex items-center gap-1 mr-2">
+              <button onClick={() => setIsMuted(v => !v)} className="p-1 hover:bg-neutral-700 rounded">
+                {isMuted ? <VolumeX size={14} className="text-neutral-400" /> : <Volume2 size={14} className="text-neutral-400" />}
+              </button>
+              <input
+                type="range" min={0} max={1} step={0.05} value={isMuted ? 0 : volume}
+                onChange={e => { setVolume(Number(e.target.value)); setIsMuted(false); }}
+                className="w-16 h-1 accent-red-600"
+              />
+            </div>
+
+            <button onClick={() => { setPlayheadFrame(0); setIsPlaying(false); }} className="p-1.5 hover:bg-neutral-700 rounded" title="Go to start">
+              <SkipBack size={16} className="text-neutral-300" />
             </button>
-            <button onClick={stepBack} className="p-2 hover:bg-neutral-700 rounded transition-colors text-neutral-300" title="Step back (←)">
-              <SkipBack size={13} />
+            <button onClick={() => setPlayheadFrame(f => Math.max(0, f - FPS))} className="p-1.5 hover:bg-neutral-700 rounded" title="Step back 1s">
+              <Rewind size={16} className="text-neutral-300" />
             </button>
             <button
-              onClick={togglePlay}
-              className="p-2.5 bg-red-600 hover:bg-red-500 rounded-full transition-colors mx-2 shadow-lg shadow-red-900/40"
-              title={tl.isPlaying ? 'Pause (Space)' : 'Play (Space)'}
+              onClick={() => setIsPlaying(v => !v)}
+              className="p-2.5 bg-red-600 hover:bg-red-500 rounded-full shadow-lg shadow-red-900/50 transition-colors"
+              title="Play/Pause (Space)"
             >
-              {tl.isPlaying ? <Pause size={18} /> : <Play size={18} />}
+              {isPlaying ? <Pause size={18} className="text-white" fill="white" /> : <Play size={18} className="text-white" fill="white" />}
             </button>
-            <button onClick={stepForward} className="p-2 hover:bg-neutral-700 rounded transition-colors text-neutral-300" title="Step forward (→)">
-              <SkipForward size={13} />
+            <button onClick={() => setPlayheadFrame(f => Math.min(totalFrames - 1, f + FPS))} className="p-1.5 hover:bg-neutral-700 rounded" title="Step forward 1s">
+              <FastForward size={16} className="text-neutral-300" />
             </button>
-            <button onClick={goToEnd} className="p-2 hover:bg-neutral-700 rounded transition-colors text-neutral-300" title="Go to end (End)">
-              <SkipForward size={16} />
+            <button onClick={() => { setPlayheadFrame(totalFrames - 1); setIsPlaying(false); }} className="p-1.5 hover:bg-neutral-700 rounded" title="Go to end">
+              <SkipForward size={16} className="text-neutral-300" />
             </button>
-          </div>
-        </div>
 
-        {/* Inspector Panel */}
-        <div className="w-64 flex-shrink-0 flex flex-col bg-neutral-900 border-l border-neutral-800">
-          {/* Inspector header */}
-          <div className="flex items-center gap-2 px-3 py-1.5 bg-neutral-850 border-b border-neutral-800 flex-shrink-0">
-            <Info size={13} className="text-neutral-400" />
-            <span className="text-xs font-semibold text-neutral-300 uppercase tracking-wider">Clip Inspector</span>
-          </div>
-
-          <div className="flex-1 overflow-y-auto p-3 space-y-4">
-            {selectedClip ? (
-              <>
-                {/* Thumbnail */}
-                {selectedClip.imageUrl && (
-                  <div className="w-full aspect-video bg-black rounded overflow-hidden border border-neutral-700">
-                    <img src={selectedClip.imageUrl} alt="" className="w-full h-full object-contain" />
-                  </div>
-                )}
-
-                {/* Clip info */}
-                <div className="space-y-2">
-                  <div>
-                    <div className="text-[10px] text-neutral-500 uppercase tracking-wider mb-1">Clip Name</div>
-                    <div className="text-sm text-white font-medium">{selectedClip.label}</div>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <div className="text-[10px] text-neutral-500 uppercase tracking-wider mb-1">Start</div>
-                      <div className="text-xs text-neutral-300 font-mono">{framesToTimecode(selectedClip.startFrame, tl.fps)}</div>
-                    </div>
-                    <div>
-                      <div className="text-[10px] text-neutral-500 uppercase tracking-wider mb-1">Duration</div>
-                      <div className="text-xs text-neutral-300 font-mono">{framesToTimecode(selectedClip.durationFrames, tl.fps)}</div>
-                    </div>
-                    <div>
-                      <div className="text-[10px] text-neutral-500 uppercase tracking-wider mb-1">End</div>
-                      <div className="text-xs text-neutral-300 font-mono">{framesToTimecode(selectedClip.startFrame + selectedClip.durationFrames, tl.fps)}</div>
-                    </div>
-                    <div>
-                      <div className="text-[10px] text-neutral-500 uppercase tracking-wider mb-1">Track</div>
-                      <div className="text-xs text-neutral-300">{tl.tracks.find(t => t.id === selectedClip.trackId)?.name ?? '—'}</div>
-                    </div>
-                  </div>
-                  <div>
-                    <div className="text-[10px] text-neutral-500 uppercase tracking-wider mb-1">Status</div>
-                    <div className="flex gap-1.5">
-                      {selectedClip.locked && <span className="text-[10px] bg-yellow-900/40 text-yellow-400 px-1.5 py-0.5 rounded">Locked</span>}
-                      {selectedClip.muted && <span className="text-[10px] bg-red-900/40 text-red-400 px-1.5 py-0.5 rounded">Muted</span>}
-                      {!selectedClip.locked && !selectedClip.muted && <span className="text-[10px] bg-green-900/40 text-green-400 px-1.5 py-0.5 rounded">Active</span>}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Quick actions */}
-                <div className="space-y-1.5 pt-2 border-t border-neutral-800">
-                  <div className="text-[10px] text-neutral-500 uppercase tracking-wider mb-2">Actions</div>
-                  <button
-                    onClick={() => splitClip(selectedClip.id)}
-                    className="w-full flex items-center gap-2 px-2 py-1.5 text-xs text-neutral-300 hover:bg-neutral-800 rounded transition-colors"
-                  >
-                    <Scissors size={11} /> Split at playhead
-                  </button>
-                  <button
-                    onClick={() => duplicateClip(selectedClip.id)}
-                    className="w-full flex items-center gap-2 px-2 py-1.5 text-xs text-neutral-300 hover:bg-neutral-800 rounded transition-colors"
-                  >
-                    <Copy size={11} /> Duplicate
-                  </button>
-                  <button
-                    onClick={() => setTl(prev => ({ ...prev, clips: prev.clips.map(c => c.id === selectedClip.id ? { ...c, locked: !c.locked } : c) }))}
-                    className="w-full flex items-center gap-2 px-2 py-1.5 text-xs text-neutral-300 hover:bg-neutral-800 rounded transition-colors"
-                  >
-                    {selectedClip.locked ? <Unlock size={11} /> : <Lock size={11} />}
-                    {selectedClip.locked ? 'Unlock' : 'Lock'}
-                  </button>
-                  <button
-                    onClick={() => deleteClip(selectedClip.id)}
-                    className="w-full flex items-center gap-2 px-2 py-1.5 text-xs text-red-400 hover:bg-red-900/20 rounded transition-colors"
-                  >
-                    <Trash2 size={11} /> Delete clip
-                  </button>
-                </div>
-              </>
-            ) : (
-              <div className="flex flex-col items-center justify-center h-full text-center py-8">
-                <Film size={28} className="text-neutral-700 mb-3" strokeWidth={1} />
-                <div className="text-xs text-neutral-600">Click a clip to inspect it</div>
-              </div>
-            )}
-          </div>
-
-          {/* Project stats */}
-          <div className="px-3 py-2 border-t border-neutral-800 bg-neutral-950 flex-shrink-0">
-            <div className="grid grid-cols-2 gap-x-3 gap-y-1">
-              <div className="text-[10px] text-neutral-600">Clips: <span className="text-neutral-400">{tl.clips.length}</span></div>
-              <div className="text-[10px] text-neutral-600">Tracks: <span className="text-neutral-400">{tl.tracks.length}</span></div>
-              <div className="text-[10px] text-neutral-600">Duration: <span className="text-neutral-400 font-mono">{framesToTimecode(tl.totalFrames, tl.fps)}</span></div>
-              <div className="text-[10px] text-neutral-600">FPS: <span className="text-neutral-400">{tl.fps}</span></div>
+            {/* In/Out point buttons */}
+            <div className="flex items-center gap-1 ml-2 border-l border-neutral-700 pl-2">
+              <button onClick={() => setInPoint(playheadFrame)} className="px-2 py-1 text-xs bg-neutral-800 hover:bg-neutral-700 rounded text-yellow-400" title="Set In Point (I)">I</button>
+              <button onClick={() => setOutPoint(playheadFrame)} className="px-2 py-1 text-xs bg-neutral-800 hover:bg-neutral-700 rounded text-yellow-400" title="Set Out Point (O)">O</button>
+              {(inPoint !== null || outPoint !== null) && (
+                <button onClick={() => { setInPoint(null); setOutPoint(null); }} className="px-2 py-1 text-xs bg-neutral-800 hover:bg-neutral-700 rounded text-neutral-400">Clear</button>
+              )}
             </div>
           </div>
         </div>
+
+        {/* ── Clip Inspector ── */}
+        <div className="w-64 flex-shrink-0 flex flex-col bg-neutral-900 border-l border-neutral-800">
+          <div className="px-3 py-1.5 bg-neutral-900 border-b border-neutral-800 flex-shrink-0">
+            <span className="text-xs text-neutral-400 font-medium uppercase tracking-wider">Clip Inspector</span>
+          </div>
+
+          {selectedClip ? (
+            <div className="flex-1 overflow-y-auto p-3 space-y-3">
+              {/* Thumbnail */}
+              {selectedClip.imageUrl && (
+                <div className="rounded-lg overflow-hidden border border-neutral-700 aspect-video bg-black">
+                  <img src={selectedClip.imageUrl} alt={selectedClip.label} className="w-full h-full object-cover" />
+                </div>
+              )}
+              {selectedClip.videoUrl && !selectedClip.imageUrl && (
+                <div className="rounded-lg overflow-hidden border border-neutral-700 aspect-video bg-black flex items-center justify-center">
+                  <Film size={24} className="text-neutral-600" />
+                </div>
+              )}
+
+              {/* Clip info */}
+              <div className="space-y-2">
+                <div>
+                  <p className="text-xs text-neutral-500 mb-0.5">Name</p>
+                  <p className="text-sm text-white font-medium">{selectedClip.label}</p>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <p className="text-xs text-neutral-500 mb-0.5">Start</p>
+                    <p className="text-xs text-neutral-300 font-mono">{framesToTimecode(selectedClip.startFrame, FPS)}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-neutral-500 mb-0.5">End</p>
+                    <p className="text-xs text-neutral-300 font-mono">{framesToTimecode(selectedClip.startFrame + selectedClip.durationFrames, FPS)}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-neutral-500 mb-0.5">Duration</p>
+                    <p className="text-xs text-neutral-300 font-mono">{framesToTimecode(selectedClip.durationFrames, FPS)}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-neutral-500 mb-0.5">Track</p>
+                    <p className="text-xs text-neutral-300">{tracks.find(t => t.id === selectedClip.trackId)?.name ?? selectedClip.trackId}</p>
+                  </div>
+                </div>
+
+                {/* Media badges */}
+                <div className="flex gap-1.5 flex-wrap">
+                  {selectedClip.imageUrl && (
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-blue-900/50 text-blue-300 border border-blue-800/50">🖼 Image</span>
+                  )}
+                  {selectedClip.videoUrl && (
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-green-900/50 text-green-300 border border-green-800/50">🎬 Video</span>
+                  )}
+                  {!selectedClip.imageUrl && !selectedClip.videoUrl && (
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-neutral-800 text-neutral-500">No media</span>
+                  )}
+                </div>
+
+                {/* Quick actions */}
+                <div className="space-y-1.5 pt-1 border-t border-neutral-800">
+                  <button
+                    onClick={() => splitClip(selectedClip.id)}
+                    className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-xs transition-colors"
+                  >
+                    <Scissors size={12} /> Split at playhead
+                  </button>
+                  <button
+                    onClick={() => duplicateClip(selectedClip.id)}
+                    className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-xs transition-colors"
+                  >
+                    <RefreshCw size={12} /> Duplicate
+                  </button>
+                  <button
+                    onClick={() => toggleTrackProp(selectedClip.trackId, 'locked')}
+                    className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-xs transition-colors"
+                  >
+                    <Lock size={12} /> {selectedClip.locked ? 'Unlock' : 'Lock'} clip
+                  </button>
+                  <button
+                    onClick={() => deleteClip(selectedClip.id)}
+                    className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg bg-red-950/50 hover:bg-red-900/50 text-red-400 text-xs transition-colors"
+                  >
+                    <Trash2 size={12} /> Delete clip
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="flex-1 flex flex-col items-center justify-center text-neutral-700 p-4 text-center">
+              <Film size={32} strokeWidth={1} className="mb-2" />
+              <p className="text-xs">Click a clip to inspect it</p>
+              <p className="text-xs mt-3 text-neutral-600">Tip: Generate shots in the Storyboard tab, then come back here to edit your timeline.</p>
+            </div>
+          )}
+        </div>
       </div>
 
-      {/* ── BOTTOM SECTION: Timeline ── */}
-      <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
-
-        {/* Timeline toolbar */}
-        <div className="flex items-center gap-2 px-3 py-1.5 bg-neutral-900 border-b border-neutral-800 flex-shrink-0">
-          {/* Zoom */}
-          <div className="flex items-center gap-1">
-            <button onClick={zoomOut} className="p-1 hover:bg-neutral-700 rounded transition-colors text-neutral-400" title="Zoom out (-)">
-              <ZoomOut size={13} />
-            </button>
-            <div className="text-xs text-neutral-500 w-10 text-center">{Math.round(tl.zoom * 100)}%</div>
-            <button onClick={zoomIn} className="p-1 hover:bg-neutral-700 rounded transition-colors text-neutral-400" title="Zoom in (+)">
-              <ZoomIn size={13} />
-            </button>
-          </div>
-
-          <div className="w-px h-4 bg-neutral-700 mx-1" />
-
-          {/* Add track */}
-          <div className="flex items-center gap-1">
-            <span className="text-[10px] text-neutral-600 uppercase tracking-wider mr-1">Add Track:</span>
-            <button onClick={() => addTrack('video')} className="flex items-center gap-1 text-[11px] bg-neutral-800 hover:bg-neutral-700 px-2 py-0.5 rounded border border-neutral-700 transition-colors text-neutral-300" title="Add video track">
-              <Film size={10} /> Video
-            </button>
-            <button onClick={() => addTrack('audio')} className="flex items-center gap-1 text-[11px] bg-neutral-800 hover:bg-neutral-700 px-2 py-0.5 rounded border border-neutral-700 transition-colors text-neutral-300" title="Add audio track">
-              <Music size={10} /> Audio
-            </button>
-            <button onClick={() => addTrack('overlay')} className="flex items-center gap-1 text-[11px] bg-neutral-800 hover:bg-neutral-700 px-2 py-0.5 rounded border border-neutral-700 transition-colors text-neutral-300" title="Add overlay track">
-              <Layers size={10} /> Overlay
-            </button>
-          </div>
-
-          <div className="flex-1" />
-          <span className="text-[10px] text-neutral-600 hidden md:block">Space: play/pause · ←→: step · +−: zoom · Right-click clip for options</span>
+      {/* ═══════════════════════════════════════════════════════════════════
+          TOOLBAR
+      ═══════════════════════════════════════════════════════════════════ */}
+      <div className="flex items-center gap-2 px-3 py-1.5 bg-neutral-900 border-t border-b border-neutral-800 flex-shrink-0">
+        {/* Zoom */}
+        <div className="flex items-center gap-1">
+          <button onClick={() => setZoom(z => Math.max(0.25, z / 1.25))} className="p-1 hover:bg-neutral-700 rounded" title="Zoom out (-)">
+            <ZoomOut size={14} className="text-neutral-400" />
+          </button>
+          <span className="text-xs text-neutral-500 w-10 text-center">{Math.round(zoom * 100)}%</span>
+          <button onClick={() => setZoom(z => Math.min(8, z * 1.25))} className="p-1 hover:bg-neutral-700 rounded" title="Zoom in (+)">
+            <ZoomIn size={14} className="text-neutral-400" />
+          </button>
+          <button onClick={() => setZoom(1)} className="px-2 py-0.5 text-xs bg-neutral-800 hover:bg-neutral-700 rounded text-neutral-400 ml-1">Fit</button>
         </div>
 
+        <div className="w-px h-4 bg-neutral-700 mx-1" />
+
+        {/* Add tracks */}
+        <div className="flex items-center gap-1">
+          <span className="text-xs text-neutral-600 mr-1">Add:</span>
+          <button onClick={() => addTrack('video')} className="flex items-center gap-1 px-2 py-0.5 text-xs bg-neutral-800 hover:bg-neutral-700 rounded text-neutral-300">
+            <Film size={11} /> Video
+          </button>
+          <button onClick={() => addTrack('audio')} className="flex items-center gap-1 px-2 py-0.5 text-xs bg-neutral-800 hover:bg-neutral-700 rounded text-neutral-300">
+            <Music size={11} /> Audio
+          </button>
+          <button onClick={() => addTrack('overlay')} className="flex items-center gap-1 px-2 py-0.5 text-xs bg-neutral-800 hover:bg-neutral-700 rounded text-neutral-300">
+            <Layers size={11} /> Overlay
+          </button>
+        </div>
+
+        <div className="flex-1" />
+
+        {/* Keyboard hints */}
+        <div className="flex items-center gap-3 text-neutral-600 text-xs">
+          <span>Space: Play/Pause</span>
+          <span>I/O: In/Out</span>
+          <span>←→: Step</span>
+        </div>
+      </div>
+
+      {/* ═══════════════════════════════════════════════════════════════════
+          TIMELINE: Ruler + Tracks
+      ═══════════════════════════════════════════════════════════════════ */}
+      <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+
         {/* Ruler row */}
-        <div className="flex flex-shrink-0 border-b border-neutral-800" style={{ height: RULER_HEIGHT }}>
-          <div className="flex-shrink-0 bg-neutral-900 border-r border-neutral-800 flex items-center px-3" style={{ width: TRACK_HEADER_WIDTH }}>
-            <span className="text-[10px] text-neutral-600 uppercase tracking-widest font-medium">Timeline</span>
+        <div className="flex flex-shrink-0" style={{ height: RULER_HEIGHT }}>
+          {/* Track header spacer */}
+          <div className="flex-shrink-0 bg-neutral-900 border-r border-b border-neutral-800" style={{ width: TRACK_HEADER_WIDTH }}>
+            <div className="h-full flex items-center px-2">
+              <span className="text-xs text-neutral-600 font-mono">{framesToTimecode(playheadFrame, FPS)}</span>
+            </div>
           </div>
+          {/* Ruler scroll area */}
           <div
-            ref={rulerRef}
-            className="flex-1 overflow-hidden relative bg-neutral-900 cursor-pointer"
-            style={{ overflowX: 'hidden' }}
-            onClick={handleRulerClick}
+            ref={rulerScrollRef}
+            className="flex-1 overflow-x-hidden border-b border-neutral-800 bg-neutral-900 relative cursor-col-resize"
+            style={{ height: RULER_HEIGHT }}
           >
-            <div className="relative h-full" style={{ width: totalWidth }}>
-              {renderRuler()}
-              {tl.inPoint !== null && (
-                <div className="absolute top-0 bottom-0 w-0.5 bg-yellow-400 z-10" style={{ left: tl.inPoint * pxPerFrame }} />
+            <div
+              ref={rulerRef}
+              style={{ width: timelineWidth, height: RULER_HEIGHT, position: 'relative' }}
+              onMouseDown={handleRulerMouseDown}
+            >
+              {/* Ruler marks */}
+              {rulerMarks.map(mark => (
+                <div
+                  key={mark.frame}
+                  className="absolute top-0 flex flex-col items-center"
+                  style={{ left: mark.frame * pxPerFrame }}
+                >
+                  <div className="w-px bg-neutral-600" style={{ height: 8 }} />
+                  <span className="text-neutral-500 font-mono" style={{ fontSize: 9, marginTop: 2, whiteSpace: 'nowrap' }}>{mark.label}</span>
+                </div>
+              ))}
+
+              {/* In/Out point markers on ruler */}
+              {inPoint !== null && (
+                <div className="absolute top-0 bottom-0 w-px bg-yellow-500/60" style={{ left: inPoint * pxPerFrame }}>
+                  <div className="absolute top-0 left-0 w-2 h-2 bg-yellow-500" style={{ clipPath: 'polygon(0 0, 100% 0, 0 100%)' }} />
+                </div>
               )}
-              {tl.outPoint !== null && (
-                <div className="absolute top-0 bottom-0 w-0.5 bg-yellow-400 z-10" style={{ left: tl.outPoint * pxPerFrame }} />
+              {outPoint !== null && (
+                <div className="absolute top-0 bottom-0 w-px bg-yellow-500/60" style={{ left: outPoint * pxPerFrame }}>
+                  <div className="absolute top-0 right-0 w-2 h-2 bg-yellow-500" style={{ clipPath: 'polygon(100% 0, 0 0, 100% 100%)' }} />
+                </div>
               )}
-              <div className="absolute top-0 bottom-0 w-0.5 bg-red-500 z-20 pointer-events-none" style={{ left: tl.playheadFrame * pxPerFrame }}>
-                <div className="w-3 h-3 bg-red-500 absolute -top-0 left-1/2 -translate-x-1/2 rotate-45 shadow-lg" />
+
+              {/* Playhead on ruler */}
+              <div
+                className="absolute top-0 bottom-0 z-20 pointer-events-none"
+                style={{ left: playheadPx }}
+              >
+                <div className="w-3 h-3 bg-red-500 rounded-sm" style={{ marginLeft: -6, clipPath: 'polygon(50% 100%, 0 0, 100% 0)' }} />
+                <div className="w-px bg-red-500 absolute top-3 bottom-0 left-1/2 -translate-x-1/2" />
               </div>
             </div>
           </div>
         </div>
 
         {/* Tracks area */}
-        <div
-          ref={timelineBodyRef}
-          className="flex-1 overflow-auto"
-          style={{ scrollbarWidth: 'thin', scrollbarColor: '#404040 #1a1a1a' }}
-          onScroll={syncScroll}
-        >
-          {tl.tracks.map(track => {
-            const trackClips = tl.clips.filter(c => c.trackId === track.id);
-            const trackHeight = track.collapsed ? 32 : track.height;
-
-            return (
-              <div key={track.id} className="flex border-b border-neutral-800" style={{ height: trackHeight }}>
-                {/* Track header */}
-                <div className="flex-shrink-0 sticky left-0 z-20" style={{ width: TRACK_HEADER_WIDTH }}>
-                  <TrackHeader
-                    track={track}
-                    onToggleLock={() => updateTrack(track.id, { locked: !track.locked })}
-                    onToggleMute={() => updateTrack(track.id, { muted: !track.muted })}
-                    onToggleVisible={() => updateTrack(track.id, { visible: !track.visible })}
-                    onToggleCollapse={() => updateTrack(track.id, { collapsed: !track.collapsed })}
-                    onDelete={() => deleteTrack(track.id)}
-                  />
+        <div className="flex-1 flex min-h-0 overflow-hidden">
+          {/* Track headers */}
+          <div
+            className="flex-shrink-0 flex flex-col bg-neutral-900 border-r border-neutral-800 overflow-y-auto"
+            style={{ width: TRACK_HEADER_WIDTH }}
+          >
+            {tracks.map(track => (
+              <div
+                key={track.id}
+                className="flex-shrink-0 flex items-center gap-1 px-2 border-b border-neutral-800"
+                style={{ height: track.height, borderLeft: `3px solid ${track.color}` }}
+              >
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs text-neutral-300 font-medium truncate">{track.name}</p>
+                  <p className="text-xs text-neutral-600 capitalize">{track.type}</p>
                 </div>
+                <div className="flex items-center gap-0.5">
+                  <button onClick={() => toggleTrackProp(track.id, 'muted')} className="p-0.5 hover:bg-neutral-700 rounded" title="Mute">
+                    {track.muted ? <VolumeX size={11} className="text-yellow-400" /> : <Volume2 size={11} className="text-neutral-500" />}
+                  </button>
+                  <button onClick={() => toggleTrackProp(track.id, 'visible')} className="p-0.5 hover:bg-neutral-700 rounded" title="Hide">
+                    {track.visible ? <Eye size={11} className="text-neutral-500" /> : <EyeOff size={11} className="text-yellow-400" />}
+                  </button>
+                  <button onClick={() => toggleTrackProp(track.id, 'locked')} className="p-0.5 hover:bg-neutral-700 rounded" title="Lock">
+                    {track.locked ? <Lock size={11} className="text-yellow-400" /> : <Unlock size={11} className="text-neutral-500" />}
+                  </button>
+                  <button onClick={() => deleteTrack(track.id)} className="p-0.5 hover:bg-neutral-700 rounded" title="Delete track">
+                    <Trash2 size={11} className="text-neutral-600 hover:text-red-400" />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
 
-                {/* Track body */}
+          {/* Tracks scroll area */}
+          <div
+            ref={tracksScrollRef}
+            className="flex-1 overflow-auto relative"
+            style={{ cursor: isDraggingClip ? 'grabbing' : 'default' }}
+          >
+            <div style={{ width: timelineWidth, position: 'relative' }}>
+              {/* Track lanes */}
+              {tracks.map(track => (
                 <div
-                  className={`relative overflow-hidden ${track.muted || !track.visible ? 'opacity-30' : ''}`}
-                  style={{
-                    width: totalWidth,
-                    minWidth: '100%',
-                    background: track.type === 'video'
-                      ? 'repeating-linear-gradient(90deg, #111 0px, #111 1px, transparent 1px, transparent 30px)'
-                      : track.type === 'audio'
-                      ? 'repeating-linear-gradient(90deg, #0a1a0a 0px, #0a1a0a 1px, transparent 1px, transparent 30px)'
-                      : 'repeating-linear-gradient(90deg, #0d0a1a 0px, #0d0a1a 1px, transparent 1px, transparent 30px)',
-                  }}
-                  onClick={handleTrackBodyClick}
+                  key={track.id}
+                  className="relative border-b border-neutral-800"
+                  style={{ height: track.height, opacity: track.visible ? 1 : 0.3 }}
                 >
-                  {/* Clips */}
-                  {!track.collapsed && trackClips.map(clip => {
-                    const isSelected = tl.selectedClipIds.includes(clip.id);
-                    const clipWidth = Math.max(clip.durationFrames * pxPerFrame, 20);
+                  {/* Track background stripes */}
+                  <div className="absolute inset-0 bg-neutral-900" />
+                  <div className="absolute inset-0" style={{ backgroundImage: 'repeating-linear-gradient(90deg, transparent, transparent 59px, rgba(255,255,255,0.02) 59px, rgba(255,255,255,0.02) 60px)' }} />
 
-                    return (
+                  {/* Clips on this track */}
+                  {clips
+                    .filter(c => c.trackId === track.id)
+                    .map(clip => (
                       <div
                         key={clip.id}
-                        className={`absolute top-1 bottom-1 rounded overflow-hidden cursor-grab active:cursor-grabbing border-2 transition-shadow ${
-                          isSelected
-                            ? 'border-white shadow-lg shadow-white/20 z-20'
-                            : 'border-transparent hover:border-white/40 z-10'
+                        className={`absolute top-1 rounded-md overflow-hidden border-2 transition-shadow cursor-grab active:cursor-grabbing ${
+                          selectedClipId === clip.id
+                            ? 'border-white shadow-lg shadow-white/10 z-10'
+                            : 'border-transparent hover:border-white/30'
                         } ${clip.locked ? 'cursor-not-allowed' : ''}`}
                         style={{
                           left: clip.startFrame * pxPerFrame,
-                          width: clipWidth,
-                          backgroundColor: clip.color + 'cc',
+                          width: Math.max(clip.durationFrames * pxPerFrame - 2, 4),
+                          height: track.height - 8,
+                          backgroundColor: clip.color + '33',
+                          borderColor: selectedClipId === clip.id ? clip.color : undefined,
                         }}
-                        onMouseDown={e => handleClipMouseDown(e, clip.id, 'move')}
+                        onMouseDown={e => handleClipMouseDown(e, clip)}
                         onContextMenu={e => handleClipContextMenu(e, clip.id)}
                       >
-                        {/* Thumbnail */}
-                        {clip.imageUrl && clipWidth > 40 && (
-                          <img
-                            src={clip.imageUrl}
-                            alt=""
-                            className="absolute inset-0 w-full h-full object-cover opacity-35"
-                            draggable={false}
-                          />
+                        {/* Clip thumbnail */}
+                        {clip.imageUrl && clip.durationFrames * pxPerFrame > 40 && (
+                          <div className="absolute inset-0 opacity-40">
+                            <img src={clip.imageUrl} alt="" className="w-full h-full object-cover" draggable={false} />
+                          </div>
                         )}
-                        {/* Label */}
-                        <div className="relative z-10 px-1.5 py-0.5 flex items-center gap-1 h-full">
-                          <span className="text-white text-[10px] font-semibold truncate leading-tight drop-shadow">
-                            {clip.label}
-                          </span>
-                          {clip.locked && <Lock size={8} className="text-yellow-300 flex-shrink-0" />}
-                        </div>
-                        {/* Trim handles */}
-                        <div
-                          className="absolute left-0 top-0 bottom-0 w-2 cursor-ew-resize hover:bg-white/30 transition-colors z-20"
-                          onMouseDown={e => { e.stopPropagation(); handleClipMouseDown(e, clip.id, 'trim-left'); }}
-                        />
-                        <div
-                          className="absolute right-0 top-0 bottom-0 w-2 cursor-ew-resize hover:bg-white/30 transition-colors z-20"
-                          onMouseDown={e => { e.stopPropagation(); handleClipMouseDown(e, clip.id, 'trim-right'); }}
-                        />
+
+                        {/* Clip color bar */}
+                        <div className="absolute top-0 left-0 right-0 h-1" style={{ backgroundColor: clip.color }} />
+
+                        {/* Clip label */}
+                        {clip.durationFrames * pxPerFrame > 60 && (
+                          <div className="absolute bottom-0 left-0 right-0 px-1.5 py-0.5 bg-black/60">
+                            <p className="text-xs text-white font-medium truncate" style={{ fontSize: 10 }}>{clip.label}</p>
+                          </div>
+                        )}
+
+                        {/* Video indicator */}
+                        {clip.videoUrl && (
+                          <div className="absolute top-1.5 right-1.5">
+                            <Film size={10} className="text-green-400" />
+                          </div>
+                        )}
+
+                        {/* Lock indicator */}
+                        {clip.locked && (
+                          <div className="absolute inset-0 flex items-center justify-center bg-black/30">
+                            <Lock size={12} className="text-yellow-400" />
+                          </div>
+                        )}
                       </div>
-                    );
-                  })}
-
-                  {/* Playhead line */}
-                  <div
-                    className="absolute top-0 bottom-0 w-0.5 bg-red-500 z-30 pointer-events-none"
-                    style={{ left: tl.playheadFrame * pxPerFrame }}
-                  />
+                    ))}
                 </div>
-              </div>
-            );
-          })}
+              ))}
 
-          {tl.tracks.length === 0 && (
-            <div className="flex items-center justify-center h-24 text-neutral-600 text-sm">
-              No tracks. Add a video or audio track above.
+              {/* Playhead line across all tracks */}
+              <div
+                className="absolute top-0 bottom-0 z-20 pointer-events-none"
+                style={{ left: playheadPx, width: 1, backgroundColor: '#ef4444', boxShadow: '0 0 4px #ef4444' }}
+              />
+
+              {/* In/Out point shading */}
+              {inPoint !== null && outPoint !== null && inPoint < outPoint && (
+                <div
+                  className="absolute top-0 bottom-0 bg-yellow-500/10 border-x border-yellow-500/30 pointer-events-none z-10"
+                  style={{ left: inPoint * pxPerFrame, width: (outPoint - inPoint) * pxPerFrame }}
+                />
+              )}
             </div>
-          )}
+          </div>
         </div>
+      </div>
 
-        {/* Status bar */}
-        <div className="flex items-center gap-4 px-3 py-1 bg-neutral-900 border-t border-neutral-800 text-[10px] text-neutral-500 flex-shrink-0">
-          <span>{tl.clips.length} clips</span>
-          <span>{tl.tracks.length} tracks</span>
-          <span>Duration: {framesToTimecode(tl.totalFrames, tl.fps)}</span>
-          <span>Zoom: {Math.round(tl.zoom * 100)}%</span>
-          {tl.selectedClipIds.length > 0 && <span className="text-white">{tl.selectedClipIds.length} selected</span>}
-          <div className="flex-1" />
-          <span className="text-neutral-700">Drag clips to move · Drag edges to trim · Right-click for options</span>
-        </div>
+      {/* ═══════════════════════════════════════════════════════════════════
+          STATUS BAR
+      ═══════════════════════════════════════════════════════════════════ */}
+      <div className="flex items-center gap-4 px-3 py-1 bg-neutral-900 border-t border-neutral-800 flex-shrink-0 text-xs text-neutral-500">
+        <span>{clips.length} clips</span>
+        <span>{tracks.length} tracks</span>
+        <span>Duration: {framesToTimecode(totalFrames, FPS)}</span>
+        <span>Zoom: {Math.round(zoom * 100)}%</span>
+        <span>{FPS} fps</span>
+        {selectedClip && <span className="text-neutral-400">Selected: <span className="text-white">{selectedClip.label}</span></span>}
+        <div className="flex-1" />
+        <span className="text-neutral-600">Space: Play · I/O: In/Out · +/-: Zoom · ←→: Step</span>
       </div>
 
       {/* Context menu */}
       {contextMenu && (
         <div
-          className="fixed z-50 bg-neutral-800 border border-neutral-600 rounded-lg shadow-2xl py-1 min-w-[170px]"
+          className="fixed z-50 bg-neutral-800 border border-neutral-700 rounded-lg shadow-xl py-1 min-w-36"
           style={{ left: contextMenu.x, top: contextMenu.y }}
+          onClick={e => e.stopPropagation()}
         >
-          <button onClick={() => splitClip(contextMenu.clipId)} className="w-full text-left px-3 py-1.5 text-sm hover:bg-neutral-700 flex items-center gap-2 text-neutral-200">
-            <Scissors size={12} /> Split at playhead
+          <button onClick={() => splitClip(contextMenu.clipId)} className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-neutral-700 text-sm text-neutral-200">
+            <Scissors size={13} /> Split at playhead
           </button>
-          <button onClick={() => duplicateClip(contextMenu.clipId)} className="w-full text-left px-3 py-1.5 text-sm hover:bg-neutral-700 flex items-center gap-2 text-neutral-200">
-            <Copy size={12} /> Duplicate clip
-          </button>
-          <div className="border-t border-neutral-700 my-1" />
-          <button
-            onClick={() => {
-              setTl(prev => ({ ...prev, clips: prev.clips.map(c => c.id === contextMenu.clipId ? { ...c, locked: !c.locked } : c) }));
-              setContextMenu(null);
-            }}
-            className="w-full text-left px-3 py-1.5 text-sm hover:bg-neutral-700 flex items-center gap-2 text-neutral-200"
-          >
-            <Lock size={12} /> Toggle lock
+          <button onClick={() => duplicateClip(contextMenu.clipId)} className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-neutral-700 text-sm text-neutral-200">
+            <RefreshCw size={13} /> Duplicate
           </button>
           <div className="border-t border-neutral-700 my-1" />
-          <button onClick={() => deleteClip(contextMenu.clipId)} className="w-full text-left px-3 py-1.5 text-sm hover:bg-red-900/40 text-red-400 flex items-center gap-2">
-            <Trash2 size={12} /> Delete clip
+          <button onClick={() => deleteClip(contextMenu.clipId)} className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-red-900/50 text-sm text-red-400">
+            <Trash2 size={13} /> Delete
           </button>
         </div>
       )}
     </div>
   );
 };
-
-export default TimelineEditor;
