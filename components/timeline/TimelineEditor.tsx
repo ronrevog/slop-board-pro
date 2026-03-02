@@ -57,7 +57,6 @@ export interface TimelineEditorProps {
   onUpdateProject: (project: Project) => void;
 }
 
-// Exposed handle for SLOPBOT control
 export interface TimelineHandle {
   insertClips: (shotIds: { sceneId: string; shotId: string }[], trackId?: string) => void;
   clearTimeline: () => void;
@@ -125,13 +124,12 @@ interface SourceMonitorProps {
 
 const SourceMonitor: React.FC<SourceMonitorProps> = ({ items, onSendToTimeline, tracks }) => {
   const [selected, setSelected] = useState<SourceItem | null>(null);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [currentTime, setCurrentTime] = useState(0);
-  const [duration, setDuration] = useState(0);
   const [targetTrack, setTargetTrack] = useState('v1');
   const [expandedScenes, setExpandedScenes] = useState<Set<string>>(new Set());
   const videoRef = useRef<HTMLVideoElement>(null);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [videoTime, setVideoTime] = useState(0);
+  const [videoDuration, setVideoDuration] = useState(0);
+  const [isSourcePlaying, setIsSourcePlaying] = useState(false);
 
   const byScene = useMemo(() => {
     const map = new Map<string, { sceneName: string; items: SourceItem[] }>();
@@ -146,50 +144,30 @@ const SourceMonitor: React.FC<SourceMonitorProps> = ({ items, onSendToTimeline, 
     setExpandedScenes(new Set(Array.from(byScene.keys())));
   }, [byScene]);
 
-  useEffect(() => {
-    if (isPlaying && selected && !selected.videoUrl) {
-      intervalRef.current = setInterval(() => {
-        setCurrentTime(t => {
-          if (t >= duration) { setIsPlaying(false); return 0; }
-          return t + 1 / FPS;
-        });
-      }, 1000 / FPS);
-    } else {
-      if (intervalRef.current) clearInterval(intervalRef.current);
-    }
-    return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
-  }, [isPlaying, selected, duration]);
-
   const selectItem = (item: SourceItem) => {
     setSelected(item);
-    setIsPlaying(false);
-    setCurrentTime(0);
-    setDuration(item.durationFrames / FPS);
+    setIsSourcePlaying(false);
+    setVideoTime(0);
+    setVideoDuration(item.durationFrames / FPS);
     if (videoRef.current) {
       videoRef.current.pause();
       videoRef.current.currentTime = 0;
     }
   };
 
-  const togglePlay = () => {
+  const toggleSourcePlay = () => {
     if (!selected) return;
     if (selected.videoUrl && videoRef.current) {
-      if (isPlaying) videoRef.current.pause();
-      else videoRef.current.play().catch(() => {});
+      if (isSourcePlaying) {
+        videoRef.current.pause();
+        setIsSourcePlaying(false);
+      } else {
+        videoRef.current.play().then(() => setIsSourcePlaying(true)).catch(() => {});
+      }
     }
-    setIsPlaying(v => !v);
   };
 
-  const handleVideoTimeUpdate = () => { if (videoRef.current) setCurrentTime(videoRef.current.currentTime); };
-  const handleVideoEnded = () => setIsPlaying(false);
-  const handleVideoLoadedMetadata = () => { if (videoRef.current) setDuration(videoRef.current.duration); };
-
-  const sendToTimeline = () => {
-    if (!selected) return;
-    onSendToTimeline(selected, targetTrack);
-  };
-
-  const progress = duration > 0 ? currentTime / duration : 0;
+  const progress = videoDuration > 0 ? videoTime / videoDuration : 0;
 
   return (
     <div className="flex flex-col h-full bg-neutral-950 border-r border-neutral-800">
@@ -207,9 +185,11 @@ const SourceMonitor: React.FC<SourceMonitorProps> = ({ items, onSendToTimeline, 
             ref={videoRef}
             src={selected.videoUrl}
             className="max-w-full max-h-full object-contain"
-            onTimeUpdate={handleVideoTimeUpdate}
-            onEnded={handleVideoEnded}
-            onLoadedMetadata={handleVideoLoadedMetadata}
+            onTimeUpdate={() => { if (videoRef.current) setVideoTime(videoRef.current.currentTime); }}
+            onEnded={() => setIsSourcePlaying(false)}
+            onLoadedMetadata={() => { if (videoRef.current) setVideoDuration(videoRef.current.duration); }}
+            onPlay={() => setIsSourcePlaying(true)}
+            onPause={() => setIsSourcePlaying(false)}
             playsInline
           />
         ) : selected?.imageUrl ? (
@@ -222,29 +202,31 @@ const SourceMonitor: React.FC<SourceMonitorProps> = ({ items, onSendToTimeline, 
         )}
         {selected && (
           <div className="absolute bottom-1.5 left-1/2 -translate-x-1/2 bg-black/70 px-2 py-0.5 rounded font-mono text-xs text-white tracking-widest">
-            {framesToTimecode(Math.round(currentTime * FPS))} / {framesToTimecode(Math.round(duration * FPS))}
+            {framesToTimecode(Math.round(videoTime * FPS))} / {framesToTimecode(Math.round(videoDuration * FPS))}
           </div>
         )}
       </div>
 
+      {/* Progress bar */}
       <div className="h-1 bg-neutral-800 flex-shrink-0 cursor-pointer" onClick={e => {
-        if (!selected || !duration) return;
+        if (!selected || !videoDuration) return;
         const rect = e.currentTarget.getBoundingClientRect();
-        const t = ((e.clientX - rect.left) / rect.width) * duration;
-        setCurrentTime(t);
+        const t = ((e.clientX - rect.left) / rect.width) * videoDuration;
+        setVideoTime(t);
         if (videoRef.current) videoRef.current.currentTime = t;
       }}>
-        <div className="h-full bg-red-600 transition-none" style={{ width: `${progress * 100}%` }} />
+        <div className="h-full bg-red-600" style={{ width: `${progress * 100}%` }} />
       </div>
 
+      {/* Source transport */}
       <div className="flex items-center justify-center gap-1 px-2 py-1.5 bg-neutral-900 border-b border-neutral-800 flex-shrink-0">
-        <button onClick={() => { setCurrentTime(0); if (videoRef.current) videoRef.current.currentTime = 0; }} className="p-1 hover:bg-neutral-700 rounded">
+        <button onClick={() => { setVideoTime(0); if (videoRef.current) videoRef.current.currentTime = 0; }} className="p-1 hover:bg-neutral-700 rounded">
           <SkipBack size={13} className="text-neutral-400" />
         </button>
-        <button onClick={togglePlay} className="p-1.5 bg-red-700 hover:bg-red-600 rounded-full">
-          {isPlaying ? <Pause size={13} className="text-white" fill="white" /> : <Play size={13} className="text-white" fill="white" />}
+        <button onClick={toggleSourcePlay} className="p-1.5 bg-red-700 hover:bg-red-600 rounded-full">
+          {isSourcePlaying ? <Pause size={13} className="text-white" fill="white" /> : <Play size={13} className="text-white" fill="white" />}
         </button>
-        <button onClick={() => { setCurrentTime(duration); if (videoRef.current) videoRef.current.currentTime = duration; }} className="p-1 hover:bg-neutral-700 rounded">
+        <button onClick={() => { if (videoRef.current) { videoRef.current.currentTime = videoDuration; setVideoTime(videoDuration); } }} className="p-1 hover:bg-neutral-700 rounded">
           <SkipForward size={13} className="text-neutral-400" />
         </button>
 
@@ -259,9 +241,9 @@ const SourceMonitor: React.FC<SourceMonitorProps> = ({ items, onSendToTimeline, 
             ))}
           </select>
           <button
-            onClick={sendToTimeline}
+            onClick={() => { if (selected) onSendToTimeline(selected, targetTrack); }}
             disabled={!selected}
-            className="flex items-center gap-1 px-2 py-1 text-xs bg-red-700 hover:bg-red-600 disabled:opacity-40 disabled:cursor-not-allowed rounded text-white font-medium transition-colors"
+            className="flex items-center gap-1 px-2 py-1 text-xs bg-red-700 hover:bg-red-600 disabled:opacity-40 disabled:cursor-not-allowed rounded text-white"
             title="Insert clip at playhead on selected track"
           >
             <PlusCircle size={11} /> Insert
@@ -269,34 +251,28 @@ const SourceMonitor: React.FC<SourceMonitorProps> = ({ items, onSendToTimeline, 
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto">
+      {/* Clip browser */}
+      <div className="flex-1 overflow-y-auto custom-scrollbar">
         {items.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-neutral-700 p-4 text-center">
-            <Film size={28} strokeWidth={1} className="mb-2" />
-            <p className="text-xs">No shots yet.</p>
-            <p className="text-xs mt-1 text-neutral-600">Generate shots in the Storyboard tab first.</p>
+            <Film size={24} strokeWidth={1} className="mb-2" />
+            <p className="text-xs">No shots yet. Generate shots in the Storyboard tab first.</p>
           </div>
         ) : (
           Array.from(byScene.entries()).map(([sceneId, { sceneName, items: sceneItems }]) => (
             <div key={sceneId}>
               <button
-                className="w-full flex items-center gap-1.5 px-3 py-1.5 bg-neutral-900 hover:bg-neutral-800 border-b border-neutral-800 text-left"
-                onClick={() => setExpandedScenes(prev => {
-                  const next = new Set(prev);
-                  next.has(sceneId) ? next.delete(sceneId) : next.add(sceneId);
-                  return next;
-                })}
+                onClick={() => setExpandedScenes(prev => { const n = new Set(prev); if (n.has(sceneId)) n.delete(sceneId); else n.add(sceneId); return n; })}
+                className="w-full flex items-center gap-1.5 px-3 py-1.5 bg-neutral-900/50 hover:bg-neutral-800 text-xs text-neutral-400 border-b border-neutral-800"
               >
-                {expandedScenes.has(sceneId) ? <ChevronDown size={11} className="text-neutral-500" /> : <ChevronRight size={11} className="text-neutral-500" />}
-                <span className="text-xs text-neutral-400 font-medium">{sceneName}</span>
-                <span className="text-xs text-neutral-600 ml-auto">{sceneItems.length}</span>
+                {expandedScenes.has(sceneId) ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+                <span className="font-medium">{sceneName}</span>
+                <span className="text-neutral-600 ml-auto">{sceneItems.length}</span>
               </button>
               {expandedScenes.has(sceneId) && sceneItems.map(item => (
                 <div
                   key={item.shotId}
-                  className={`flex items-center gap-2 px-3 py-2 cursor-pointer border-b border-neutral-900 transition-colors ${
-                    selected?.shotId === item.shotId ? 'bg-red-950/40 border-l-2 border-l-red-600' : 'hover:bg-neutral-900'
-                  }`}
+                  className={`flex items-center gap-2 px-3 py-1.5 cursor-pointer border-b border-neutral-800/50 hover:bg-neutral-800/50 transition-colors ${selected?.shotId === item.shotId ? 'bg-neutral-800 border-l-2 border-l-red-500' : ''}`}
                   onClick={() => selectItem(item)}
                   onDoubleClick={() => { selectItem(item); onSendToTimeline(item, targetTrack); }}
                   title="Click to preview · Double-click to insert"
@@ -349,12 +325,25 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({ project, onUpdat
   const [activePanel, setActivePanel] = useState<'program' | 'inspector'>('program');
   const [isExporting, setIsExporting] = useState(false);
 
-  const playIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Refs
   const programVideoRef = useRef<HTMLVideoElement>(null);
   const rulerRef = useRef<HTMLDivElement>(null);
   const tracksScrollRef = useRef<HTMLDivElement>(null);
   const rulerScrollRef = useRef<HTMLDivElement>(null);
   const animFrameRef = useRef<number | null>(null);
+  // Track the current video clip to avoid re-mounting the video element unnecessarily
+  const currentVideoClipIdRef = useRef<string | null>(null);
+  // Track whether video-driven playback is active (video controls the playhead)
+  const videoDrivenRef = useRef(false);
+  // Ref for latest clips/tracks to avoid stale closures in RAF
+  const clipsRef = useRef(clips);
+  clipsRef.current = clips;
+  const tracksRef = useRef(tracks);
+  tracksRef.current = tracks;
+  const playheadRef = useRef(playheadFrame);
+  playheadRef.current = playheadFrame;
+  const totalFramesRef = useRef(totalFrames);
+  totalFramesRef.current = totalFrames;
 
   // ── Build source items from project (with real video durations) ───────────
 
@@ -408,99 +397,206 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({ project, onUpdat
     setTotalFrames(Math.max(end + FPS * 10, FPS * 60));
   }, [clips]);
 
-  // ── Playback with requestAnimationFrame for smooth scrubbing ─────────────
+  // ── Find clip at a given frame ────────────────────────────────────────────
 
-  useEffect(() => {
-    if (isPlaying) {
-      let lastTime = performance.now();
-      const tick = (now: number) => {
-        const delta = now - lastTime;
-        const framesToAdvance = Math.round((delta / 1000) * FPS);
-        if (framesToAdvance > 0) {
-          lastTime = now;
-          setPlayheadFrame(f => {
-            const next = f + framesToAdvance;
-            if (next >= totalFrames - 1) { setIsPlaying(false); return 0; }
-            return next;
-          });
-        }
-        animFrameRef.current = requestAnimationFrame(tick);
-      };
-      animFrameRef.current = requestAnimationFrame(tick);
-    } else {
-      if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
-    }
-    return () => { if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current); };
-  }, [isPlaying, totalFrames]);
-
-  // ── Sync program video to playhead ───────────────────────────────────────
-
-  const getClipAtPlayhead = useCallback((): TimelineClip | null => {
-    // Priority: video tracks first, then others
-    const videoTracks = tracks.filter(t => t.type === 'video' && t.visible);
+  const getClipAtFrame = useCallback((frame: number): TimelineClip | null => {
+    const videoTracks = tracksRef.current.filter(t => t.type === 'video' && t.visible);
     for (const track of videoTracks) {
-      const clip = clips.find(c => {
+      const clip = clipsRef.current.find(c => {
         if (c.trackId !== track.id || c.muted) return false;
         const visibleDuration = c.outPoint - c.inPoint;
-        return playheadFrame >= c.startFrame && playheadFrame < c.startFrame + visibleDuration;
+        return frame >= c.startFrame && frame < c.startFrame + visibleDuration;
       });
       if (clip) return clip;
     }
     return null;
-  }, [clips, tracks, playheadFrame]);
-
-  const currentClip = getClipAtPlayhead();
-
-  useEffect(() => {
-    if (currentClip?.videoUrl && programVideoRef.current) {
-      const clipTime = (playheadFrame - currentClip.startFrame + currentClip.inPoint) / FPS;
-      if (Math.abs(programVideoRef.current.currentTime - clipTime) > 0.1) {
-        programVideoRef.current.currentTime = clipTime;
-      }
-      programVideoRef.current.volume = isMuted ? 0 : volume;
-      if (isPlaying && programVideoRef.current.paused) programVideoRef.current.play().catch(() => {});
-      else if (!isPlaying && !programVideoRef.current.paused) programVideoRef.current.pause();
-    }
-  }, [playheadFrame, isPlaying, currentClip, volume, isMuted]);
-
-  // ── Sync ruler ↔ tracks scroll ────────────────────────────────────────────
-
-  useEffect(() => {
-    const tEl = tracksScrollRef.current;
-    const rEl = rulerScrollRef.current;
-    if (!tEl || !rEl) return;
-    const onT = () => { rEl.scrollLeft = tEl.scrollLeft; };
-    const onR = () => { tEl.scrollLeft = rEl.scrollLeft; };
-    tEl.addEventListener('scroll', onT);
-    rEl.addEventListener('scroll', onR);
-    return () => { tEl.removeEventListener('scroll', onT); rEl.removeEventListener('scroll', onR); };
   }, []);
 
-  // ── Keyboard shortcuts ────────────────────────────────────────────────────
+  const currentClip = getClipAtFrame(playheadFrame);
 
+  // ══════════════════════════════════════════════════════════════════════════
+  // PLAYBACK ENGINE — Video-driven when a video clip is at the playhead,
+  // RAF-driven (for images/empty) otherwise.
+  // ══════════════════════════════════════════════════════════════════════════
+
+  // When the user presses play:
+  // 1. If the playhead is on a video clip → start the <video> element with .play(),
+  //    and use its `timeupdate` to advance the playhead. No RAF needed.
+  // 2. If the playhead is on an image clip or empty → use RAF to advance the playhead
+  //    at the correct frame rate.
+  // 3. When the playhead crosses from one clip to another, seamlessly switch modes.
+
+  // Handle play/pause toggle
+  const togglePlay = useCallback(() => {
+    setIsPlaying(prev => !prev);
+  }, []);
+
+  // Video timeupdate handler — drives the playhead when video is playing
+  const handleProgramTimeUpdate = useCallback(() => {
+    if (!videoDrivenRef.current) return;
+    const vid = programVideoRef.current;
+    if (!vid) return;
+    const clip = getClipAtFrame(playheadRef.current);
+    if (!clip || !clip.videoUrl) return;
+    // Convert video currentTime back to timeline frame
+    const clipLocalTime = vid.currentTime;
+    const timelineFrame = clip.startFrame + Math.round(clipLocalTime * FPS) - clip.inPoint;
+    const visibleEnd = clip.startFrame + (clip.outPoint - clip.inPoint);
+    if (timelineFrame >= visibleEnd) {
+      // Clip ended — advance to next frame and let the RAF/video switch handle it
+      setPlayheadFrame(visibleEnd);
+    } else {
+      setPlayheadFrame(timelineFrame);
+    }
+  }, [getClipAtFrame]);
+
+  const handleProgramEnded = useCallback(() => {
+    // Video clip ended — check if there's a next clip
+    const clip = getClipAtFrame(playheadRef.current);
+    if (clip) {
+      const visibleEnd = clip.startFrame + (clip.outPoint - clip.inPoint);
+      setPlayheadFrame(visibleEnd);
+    }
+    // Don't stop playing — the RAF loop will pick up for the next segment
+    videoDrivenRef.current = false;
+  }, [getClipAtFrame]);
+
+  // Main playback effect
   useEffect(() => {
-    const h = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLSelectElement) return;
-      if (e.key === ' ') { e.preventDefault(); setIsPlaying(v => !v); }
-      if (e.key === 'ArrowLeft') { e.preventDefault(); setPlayheadFrame(f => Math.max(0, f - (e.shiftKey ? FPS : 1))); }
-      if (e.key === 'ArrowRight') { e.preventDefault(); setPlayheadFrame(f => Math.min(totalFrames - 1, f + (e.shiftKey ? FPS : 1))); }
-      if (e.key === '+' || e.key === '=') setZoom(z => Math.min(8, z * 1.25));
-      if (e.key === '-') setZoom(z => Math.max(0.1, z / 1.25));
-      if (e.key === 'i') setInPoint(playheadFrame);
-      if (e.key === 'o') setOutPoint(playheadFrame);
-      if (e.key === 'Escape') { setSelectedClipId(null); setContextMenu(null); }
-      // Delete: normal delete
-      if (e.key === 'Delete' || (e.key === 'Backspace' && !e.shiftKey)) {
-        if (selectedClipId) { deleteClip(selectedClipId); }
+    if (!isPlaying) {
+      // Stop everything
+      if (animFrameRef.current) {
+        cancelAnimationFrame(animFrameRef.current);
+        animFrameRef.current = null;
       }
-      // Shift+Delete: ripple delete
-      if ((e.key === 'Delete' || e.key === 'Backspace') && e.shiftKey) {
-        if (selectedClipId) { rippleDeleteClip(selectedClipId); }
+      if (programVideoRef.current && !programVideoRef.current.paused) {
+        programVideoRef.current.pause();
+      }
+      videoDrivenRef.current = false;
+      return;
+    }
+
+    // Start playback — determine mode based on current clip
+    const startPlayback = () => {
+      const clip = getClipAtFrame(playheadRef.current);
+
+      if (clip?.videoUrl && programVideoRef.current) {
+        // VIDEO MODE: let the video element drive
+        videoDrivenRef.current = true;
+        if (animFrameRef.current) {
+          cancelAnimationFrame(animFrameRef.current);
+          animFrameRef.current = null;
+        }
+
+        const clipLocalFrame = playheadRef.current - clip.startFrame + clip.inPoint;
+        const targetTime = clipLocalFrame / FPS;
+        const vid = programVideoRef.current;
+        vid.volume = isMuted ? 0 : volume;
+
+        // Only seek if we're not already close
+        if (Math.abs(vid.currentTime - targetTime) > 0.15) {
+          vid.currentTime = targetTime;
+        }
+        vid.play().catch(() => {
+          // If video play fails, fall back to RAF mode
+          videoDrivenRef.current = false;
+          startRAFLoop();
+        });
+      } else {
+        // RAF MODE: advance playhead frame-by-frame for images/empty
+        videoDrivenRef.current = false;
+        if (programVideoRef.current && !programVideoRef.current.paused) {
+          programVideoRef.current.pause();
+        }
+        startRAFLoop();
       }
     };
-    window.addEventListener('keydown', h);
-    return () => window.removeEventListener('keydown', h);
-  }, [totalFrames, playheadFrame, selectedClipId]);
+
+    const startRAFLoop = () => {
+      if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+      let lastTime = performance.now();
+
+      const tick = (now: number) => {
+        if (!isPlaying) return; // safety check
+
+        const delta = now - lastTime;
+        // Advance by the correct number of frames based on elapsed time
+        if (delta >= (1000 / FPS)) {
+          const framesToAdvance = Math.floor(delta / (1000 / FPS));
+          lastTime = now - (delta % (1000 / FPS)); // carry remainder
+
+          const currentFrame = playheadRef.current;
+          const nextFrame = currentFrame + framesToAdvance;
+
+          if (nextFrame >= totalFramesRef.current - 1) {
+            setIsPlaying(false);
+            setPlayheadFrame(0);
+            return;
+          }
+
+          // Check if we're entering a video clip
+          const nextClip = getClipAtFrame(nextFrame);
+          if (nextClip?.videoUrl && programVideoRef.current) {
+            // Switch to video-driven mode
+            setPlayheadFrame(nextFrame);
+            // Small timeout to let React update the video src if needed
+            setTimeout(() => startPlayback(), 16);
+            return;
+          }
+
+          setPlayheadFrame(nextFrame);
+        }
+
+        animFrameRef.current = requestAnimationFrame(tick);
+      };
+
+      animFrameRef.current = requestAnimationFrame(tick);
+    };
+
+    startPlayback();
+
+    return () => {
+      if (animFrameRef.current) {
+        cancelAnimationFrame(animFrameRef.current);
+        animFrameRef.current = null;
+      }
+    };
+  }, [isPlaying, getClipAtFrame, isMuted, volume]);
+
+  // When playhead moves and we're video-driven, check if we've left the current video clip
+  useEffect(() => {
+    if (!isPlaying || !videoDrivenRef.current) return;
+    const clip = getClipAtFrame(playheadFrame);
+    if (!clip?.videoUrl) {
+      // Left the video clip — pause video, switch to RAF
+      if (programVideoRef.current && !programVideoRef.current.paused) {
+        programVideoRef.current.pause();
+      }
+      videoDrivenRef.current = false;
+      // Re-trigger the play effect by toggling
+      setIsPlaying(false);
+      setTimeout(() => setIsPlaying(true), 0);
+    }
+  }, [playheadFrame, isPlaying, getClipAtFrame]);
+
+  // Sync video element when NOT playing (scrubbing / stepping)
+  useEffect(() => {
+    if (isPlaying) return;
+    if (!currentClip?.videoUrl || !programVideoRef.current) return;
+    const clipLocalFrame = playheadFrame - currentClip.startFrame + currentClip.inPoint;
+    const targetTime = clipLocalFrame / FPS;
+    // Only seek when stopped — this is fine for scrubbing
+    if (Math.abs(programVideoRef.current.currentTime - targetTime) > 0.05) {
+      programVideoRef.current.currentTime = targetTime;
+    }
+  }, [playheadFrame, isPlaying, currentClip]);
+
+  // Update video volume
+  useEffect(() => {
+    if (programVideoRef.current) {
+      programVideoRef.current.volume = isMuted ? 0 : volume;
+    }
+  }, [volume, isMuted]);
 
   // ── Derived ───────────────────────────────────────────────────────────────
 
@@ -520,6 +616,19 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({ project, onUpdat
     }
     return marks;
   }, [totalFrames, pxPerFrame]);
+
+  // ── Sync ruler ↔ tracks scroll ────────────────────────────────────────────
+
+  useEffect(() => {
+    const tEl = tracksScrollRef.current;
+    const rEl = rulerScrollRef.current;
+    if (!tEl || !rEl) return;
+    const onT = () => { rEl.scrollLeft = tEl.scrollLeft; };
+    const onR = () => { tEl.scrollLeft = rEl.scrollLeft; };
+    tEl.addEventListener('scroll', onT);
+    rEl.addEventListener('scroll', onR);
+    return () => { tEl.removeEventListener('scroll', onT); rEl.removeEventListener('scroll', onR); };
+  }, []);
 
   // ── Insert clip from Source Monitor ──────────────────────────────────────
 
@@ -642,21 +751,12 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({ project, onUpdat
       setClips(prev => prev.map(c => {
         if (c.id !== isTrimming.clipId) return c;
         if (isTrimming.edge === 'left') {
-          // Trim left: move start frame and inPoint
           const newInPoint = Math.max(0, Math.min(isTrimming.origOutPoint - FPS, isTrimming.origInPoint + deltaFrames));
           const inDelta = newInPoint - isTrimming.origInPoint;
-          return {
-            ...c,
-            startFrame: isTrimming.origStartFrame + inDelta,
-            inPoint: newInPoint,
-          };
+          return { ...c, startFrame: isTrimming.origStartFrame + inDelta, inPoint: newInPoint };
         } else {
-          // Trim right: move outPoint
           const newOutPoint = Math.max(isTrimming.origInPoint + FPS, Math.min(isTrimming.origDuration, isTrimming.origOutPoint + deltaFrames));
-          return {
-            ...c,
-            outPoint: newOutPoint,
-          };
+          return { ...c, outPoint: newOutPoint };
         }
       }));
     };
@@ -682,7 +782,6 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({ project, onUpdat
       return prev
         .filter(c => c.id !== id)
         .map(c => {
-          // Only ripple clips on the same track that come after the deleted clip
           if (c.trackId === clip.trackId && c.startFrame > clip.startFrame) {
             return { ...c, startFrame: Math.max(0, c.startFrame - visibleDuration) };
           }
@@ -736,21 +835,39 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({ project, onUpdat
     setClips(prev => prev.filter(c => c.trackId !== trackId));
   };
 
+  // ── Keyboard shortcuts ────────────────────────────────────────────────────
+
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLSelectElement) return;
+      if (e.key === ' ') { e.preventDefault(); togglePlay(); }
+      if (e.key === 'ArrowLeft') { e.preventDefault(); setIsPlaying(false); setPlayheadFrame(f => Math.max(0, f - (e.shiftKey ? FPS : 1))); }
+      if (e.key === 'ArrowRight') { e.preventDefault(); setIsPlaying(false); setPlayheadFrame(f => Math.min(totalFrames - 1, f + (e.shiftKey ? FPS : 1))); }
+      if (e.key === '+' || e.key === '=') setZoom(z => Math.min(8, z * 1.25));
+      if (e.key === '-') setZoom(z => Math.max(0.1, z / 1.25));
+      if (e.key === 'i') setInPoint(playheadFrame);
+      if (e.key === 'o') setOutPoint(playheadFrame);
+      if (e.key === 'Escape') { setSelectedClipId(null); setContextMenu(null); }
+      if (e.key === 'Delete' || (e.key === 'Backspace' && !e.shiftKey)) {
+        if (selectedClipId) { deleteClip(selectedClipId); }
+      }
+      if ((e.key === 'Delete' || e.key === 'Backspace') && e.shiftKey) {
+        if (selectedClipId) { rippleDeleteClip(selectedClipId); }
+      }
+    };
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  }, [totalFrames, playheadFrame, selectedClipId, togglePlay]);
+
   // ── Export ────────────────────────────────────────────────────────────────
 
   const handleExport = async () => {
-    // Export as a simple JSON project file that can be imported into video editors
-    // For a full FFmpeg.wasm render, we'd need the library loaded
     setIsExporting(true);
     try {
       const exportData = {
         fps: FPS,
         totalFrames,
-        tracks: tracks.map(t => ({
-          id: t.id,
-          name: t.name,
-          type: t.type,
-        })),
+        tracks: tracks.map(t => ({ id: t.id, name: t.name, type: t.type })),
         clips: clips.map(c => ({
           id: c.id,
           trackId: c.trackId,
@@ -842,10 +959,14 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({ project, onUpdat
               {currentClip?.videoUrl ? (
                 <video
                   ref={programVideoRef}
+                  key={currentClip.id + '-' + currentClip.videoUrl}
                   src={currentClip.videoUrl}
                   className="max-w-full max-h-full object-contain"
                   muted={isMuted}
                   playsInline
+                  preload="auto"
+                  onTimeUpdate={handleProgramTimeUpdate}
+                  onEnded={handleProgramEnded}
                 />
               ) : currentClip?.imageUrl ? (
                 <img src={currentClip.imageUrl} alt={currentClip.label} className="max-w-full max-h-full object-contain" draggable={false} />
@@ -865,6 +986,11 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({ project, onUpdat
               {currentClip && (
                 <div className="absolute top-2 left-2 bg-black/60 text-neutral-300 text-xs px-2 py-0.5 rounded">{currentClip.label}</div>
               )}
+              {isPlaying && (
+                <div className="absolute top-2 right-2 flex items-center gap-1 bg-red-600/80 text-white text-xs px-2 py-0.5 rounded">
+                  <div className="w-1.5 h-1.5 bg-white rounded-full animate-pulse" /> PLAYING
+                </div>
+              )}
               {inPoint !== null && (
                 <div className="absolute top-2 left-1/2 -translate-x-1/2 bg-yellow-700/80 text-white text-xs px-2 py-0.5 rounded font-mono">
                   IN {framesToTimecode(inPoint)} — OUT {outPoint !== null ? framesToTimecode(outPoint) : '--'}
@@ -883,11 +1009,11 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({ project, onUpdat
                   className="w-14 h-1 accent-red-600" />
               </div>
               <button onClick={() => { setPlayheadFrame(0); setIsPlaying(false); }} className="p-1.5 hover:bg-neutral-700 rounded" title="Go to start"><SkipBack size={15} className="text-neutral-300" /></button>
-              <button onClick={() => setPlayheadFrame(f => Math.max(0, f - FPS))} className="p-1.5 hover:bg-neutral-700 rounded" title="Step back 1s"><Rewind size={15} className="text-neutral-300" /></button>
-              <button onClick={() => setIsPlaying(v => !v)} className="p-2.5 bg-red-600 hover:bg-red-500 rounded-full shadow-lg shadow-red-900/50 transition-colors" title="Play/Pause (Space)">
+              <button onClick={() => { setIsPlaying(false); setPlayheadFrame(f => Math.max(0, f - FPS)); }} className="p-1.5 hover:bg-neutral-700 rounded" title="Step back 1s"><Rewind size={15} className="text-neutral-300" /></button>
+              <button onClick={togglePlay} className="p-2.5 bg-red-600 hover:bg-red-500 rounded-full shadow-lg shadow-red-900/50 transition-colors" title="Play/Pause (Space)">
                 {isPlaying ? <Pause size={17} className="text-white" fill="white" /> : <Play size={17} className="text-white" fill="white" />}
               </button>
-              <button onClick={() => setPlayheadFrame(f => Math.min(totalFrames - 1, f + FPS))} className="p-1.5 hover:bg-neutral-700 rounded" title="Step forward 1s"><FastForward size={15} className="text-neutral-300" /></button>
+              <button onClick={() => { setIsPlaying(false); setPlayheadFrame(f => Math.min(totalFrames - 1, f + FPS)); }} className="p-1.5 hover:bg-neutral-700 rounded" title="Step forward 1s"><FastForward size={15} className="text-neutral-300" /></button>
               <button onClick={() => { setPlayheadFrame(totalFrames - 1); setIsPlaying(false); }} className="p-1.5 hover:bg-neutral-700 rounded" title="Go to end"><SkipForward size={15} className="text-neutral-300" /></button>
               <div className="flex items-center gap-1 ml-2 border-l border-neutral-700 pl-2">
                 <button onClick={() => setInPoint(playheadFrame)} className="px-2 py-1 text-xs bg-neutral-800 hover:bg-neutral-700 rounded text-yellow-400" title="Set In Point (I)">I</button>
@@ -969,7 +1095,6 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({ project, onUpdat
           <button onClick={() => addTrack('overlay')} className="flex items-center gap-1 px-2 py-0.5 text-xs bg-neutral-800 hover:bg-neutral-700 rounded text-neutral-300"><Layers size={11} /> Overlay</button>
         </div>
         <div className="flex-1" />
-        {/* Export button */}
         <button
           onClick={handleExport}
           disabled={clips.length === 0 || isExporting}
@@ -979,7 +1104,7 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({ project, onUpdat
           <Download size={12} /> {isExporting ? 'Exporting...' : 'Export EDL'}
         </button>
         <div className="w-px h-4 bg-neutral-700 mx-1" />
-        <span className="text-xs text-neutral-600">Space: Play · I/O: In/Out · +/-: Zoom · ←→: Step · Del: Delete · Shift+Del: Ripple Delete</span>
+        <span className="text-xs text-neutral-600">Space: Play · I/O: In/Out · +/-: Zoom · Arrows: Step · Del: Delete · Shift+Del: Ripple</span>
       </div>
 
       {/* ═══════════════════════════════════════════════════════════════════
@@ -1086,7 +1211,6 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({ project, onUpdat
                         )}
                         {clip.videoUrl && <div className="absolute top-1.5 right-1.5"><Film size={10} className="text-green-400" /></div>}
                         {clip.locked && <div className="absolute inset-0 flex items-center justify-center bg-black/30"><Lock size={12} className="text-yellow-400" /></div>}
-                        {/* Trim indicator: show if clip is trimmed */}
                         {(clip.inPoint > 0 || clip.outPoint < clip.durationFrames) && (
                           <div className="absolute top-1 left-1.5 flex items-center gap-0.5">
                             <GripVertical size={8} className="text-yellow-400" />
