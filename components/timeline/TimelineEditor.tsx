@@ -72,7 +72,7 @@ export interface TimelineHandle {
 const FPS = 30;
 const DEFAULT_SHOT_DURATION_SEC = 5;
 const DEFAULT_SHOT_DURATION = DEFAULT_SHOT_DURATION_SEC * FPS;
-const TRACK_HEADER_WIDTH = 160;
+const TRACK_HEADER_WIDTH = 120;
 const RULER_HEIGHT = 28;
 const TRIM_HANDLE_WIDTH = 8;
 const MIN_PANEL_H = 180;
@@ -129,11 +129,11 @@ function loadVideoDuration(url: string): Promise<number> {
 }
 
 const DEFAULT_TRACKS: TimelineTrack[] = [
-  { id: 'v1', name: 'Video 1', type: 'video', locked: false, muted: false, visible: true, color: '#dc2626', height: 72 },
-  { id: 'v2', name: 'Video 2', type: 'video', locked: false, muted: false, visible: true, color: '#ea580c', height: 72 },
-  { id: 'a1', name: 'Audio 1', type: 'audio', locked: false, muted: false, visible: true, color: '#16a34a', height: 48 },
-  { id: 'a2', name: 'Audio 2', type: 'audio', locked: false, muted: false, visible: true, color: '#0891b2', height: 48 },
-  { id: 'ol', name: 'Overlays', type: 'overlay', locked: false, muted: false, visible: true, color: '#7c3aed', height: 40 },
+  { id: 'v1', name: 'Video 1', type: 'video', locked: false, muted: false, visible: true, color: '#dc2626', height: 48 },
+  { id: 'v2', name: 'Video 2', type: 'video', locked: false, muted: false, visible: true, color: '#ea580c', height: 48 },
+  { id: 'a1', name: 'Audio 1', type: 'audio', locked: false, muted: false, visible: true, color: '#16a34a', height: 32 },
+  { id: 'a2', name: 'Audio 2', type: 'audio', locked: false, muted: false, visible: true, color: '#0891b2', height: 32 },
+  { id: 'ol', name: 'Overlays', type: 'overlay', locked: false, muted: false, visible: true, color: '#7c3aed', height: 28 },
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -180,7 +180,7 @@ const SourceMonitor: React.FC<SourceMonitorProps> = ({ items, onSendToTimeline, 
     if (!selected) return;
     if (selected.videoUrl && videoRef.current) {
       if (isSourcePlaying) { videoRef.current.pause(); setIsSourcePlaying(false); }
-      else { videoRef.current.play().then(() => setIsSourcePlaying(true)).catch(() => {}); }
+      else { videoRef.current.play().then(() => setIsSourcePlaying(true)).catch(() => { }); }
     }
   };
 
@@ -316,7 +316,7 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({ project, onUpdat
   const [isTrimming, setIsTrimming] = useState<{ clipId: string; edge: 'left' | 'right'; startX: number; origStartFrame: number; origDuration: number; origInPoint: number; origOutPoint: number } | null>(null);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; clipId: string } | null>(null);
   const [isExporting, setIsExporting] = useState(false);
-  const [monitorHeight, setMonitorHeight] = useState(0.45);
+  const [monitorHeight, setMonitorHeight] = useState(0.32);
   const [sourceWidth, setSourceWidth] = useState(0.35);
   const [isDraggingHDivider, setIsDraggingHDivider] = useState(false);
   const [isDraggingVDivider, setIsDraggingVDivider] = useState(false);
@@ -364,7 +364,7 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({ project, onUpdat
       scene.shots.forEach((shot, i) => {
         const loadedDur = sourceDurations.get(shot.id);
         items.push({
-          shotId: shot.id, sceneId: scene.id, sceneName: scene.title || `Scene ${project.scenes.indexOf(scene) + 1}`,
+          shotId: shot.id, sceneId: scene.id, sceneName: scene.name || `Scene ${project.scenes.indexOf(scene) + 1}`,
           shotNumber: i + 1, description: shot.description || `Shot ${i + 1}`,
           imageUrl: shot.imageUrl, videoUrl: shot.videoUrl,
           durationFrames: loadedDur ?? DEFAULT_SHOT_DURATION,
@@ -386,7 +386,7 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({ project, onUpdat
             try {
               const dur = await loadVideoDuration(shot.videoUrl);
               if (!cancelled) newDurations.set(shot.id, dur);
-            } catch { /* ignore */ }
+            } catch (_e) { /* ignore */ }
           }
         }
       }
@@ -541,13 +541,17 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({ project, onUpdat
       if (clip?.videoUrl && programVideoRef.current) {
         const vid = programVideoRef.current;
 
-        // If this is a new video clip, set it up
+        // If this is a new video clip, set it up (imperative src change)
         if (activeVideoClipIdRef.current !== clip.id) {
           activeVideoClipIdRef.current = clip.id;
+          if (vid.src !== clip.videoUrl) {
+            vid.src = clip.videoUrl!;
+            vid.load();
+          }
           const clipLocalFrame = currentFrame - clip.startFrame + clip.inPoint;
           vid.currentTime = clipLocalFrame / FPS;
           vid.playbackRate = clip.speed || 1;
-          vid.play().catch(() => {});
+          vid.play().catch(() => { });
         }
 
         // Read the video's current time and derive the playhead position
@@ -573,12 +577,16 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({ project, onUpdat
           // Check if there's another clip immediately after
           const nextClip = getClipAtFrameRef(newFrame);
           if (nextClip?.videoUrl && programVideoRef.current) {
-            // Seamless transition to next video clip
+            // Seamless transition to next video clip — imperative src change
             activeVideoClipIdRef.current = nextClip.id;
+            if (programVideoRef.current.src !== nextClip.videoUrl) {
+              programVideoRef.current.src = nextClip.videoUrl!;
+              programVideoRef.current.load();
+            }
             const nextLocalFrame = newFrame - nextClip.startFrame + nextClip.inPoint;
             programVideoRef.current.currentTime = nextLocalFrame / FPS;
             programVideoRef.current.playbackRate = nextClip.speed || 1;
-            programVideoRef.current.play().catch(() => {});
+            programVideoRef.current.play().catch(() => { });
           }
         } else {
           setPlayheadFrame(Math.max(clip.startFrame, Math.min(clipEnd - 1, clipFrame)));
@@ -603,13 +611,17 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({ project, onUpdat
         // Check if we're about to enter a video clip
         const nextClip = getClipAtFrameRef(nextFrame);
         if (nextClip?.videoUrl && programVideoRef.current) {
-          // Entering a video clip — set up and let video drive
+          // Entering a video clip — imperative src change + play
           setPlayheadFrame(nextFrame);
           activeVideoClipIdRef.current = nextClip.id;
+          if (programVideoRef.current.src !== nextClip.videoUrl) {
+            programVideoRef.current.src = nextClip.videoUrl!;
+            programVideoRef.current.load();
+          }
           const clipLocalFrame = nextFrame - nextClip.startFrame + nextClip.inPoint;
           programVideoRef.current.currentTime = clipLocalFrame / FPS;
           programVideoRef.current.playbackRate = nextClip.speed || 1;
-          programVideoRef.current.play().catch(() => {});
+          programVideoRef.current.play().catch(() => { });
         } else {
           setPlayheadFrame(nextFrame);
         }
@@ -628,18 +640,23 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({ project, onUpdat
     };
   }, [isPlaying, stopPlayback, getClipAtFrameRef, setPlayheadFrame, setIsPlaying]);
 
-  // Sync video element when scrubbing (paused)
+  // Sync video element when scrubbing (paused) — imperative src update
   useEffect(() => {
     if (isPlaying) return;
-    if (!programVideoRef.current) return;
+    const vid = programVideoRef.current;
+    if (!vid) return;
 
     const clip = getClipAtFrame(playheadFrame);
     if (clip?.videoUrl) {
+      // Update src if we moved to a different clip
+      if (vid.src !== clip.videoUrl) {
+        vid.src = clip.videoUrl;
+        vid.load();
+      }
       const clipLocalFrame = playheadFrame - clip.startFrame + clip.inPoint;
       const targetTime = clipLocalFrame / FPS;
-      // Only seek if significantly different to avoid unnecessary seeks
-      if (Math.abs(programVideoRef.current.currentTime - targetTime) > 0.04) {
-        programVideoRef.current.currentTime = targetTime;
+      if (Math.abs(vid.currentTime - targetTime) > 0.04) {
+        vid.currentTime = targetTime;
       }
     }
   }, [playheadFrame, isPlaying, getClipAtFrame]);
@@ -849,7 +866,7 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({ project, onUpdat
   const addTrack = (type: 'video' | 'audio' | 'overlay') => {
     const count = tracks.filter(t => t.type === type).length + 1;
     const colors = { video: '#dc2626', audio: '#16a34a', overlay: '#7c3aed' };
-    const heights = { video: 72, audio: 48, overlay: 40 };
+    const heights = { video: 48, audio: 32, overlay: 28 };
     const prefixes = { video: 'Video', audio: 'Audio', overlay: 'Overlay' };
     setTracks(prev => [...prev, { id: crypto.randomUUID(), name: `${prefixes[type]} ${count}`, type, locked: false, muted: false, visible: true, color: colors[type], height: heights[type] }]);
   };
