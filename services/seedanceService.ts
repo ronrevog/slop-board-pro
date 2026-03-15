@@ -48,10 +48,10 @@ export interface SeedanceTaskResponse {
     message: string;
 }
 
-// Use Vite proxy in dev to avoid CORS, direct URLs in production
+// Use Vite proxy in dev, Vercel serverless proxy in production
 const isDev = typeof window !== 'undefined' && window.location.hostname === 'localhost';
 const PIAPI_BASE_URL = isDev ? '/piapi-api' : 'https://api.piapi.ai';
-const PIAPI_UPLOAD_URL = isDev ? '/piapi-upload' : 'https://upload.theapi.app/api/ephemeral_resource';
+const PIAPI_UPLOAD_URL = isDev ? '/piapi-upload' : '/api/piapi-upload';
 
 /**
  * Upload a file to PiAPI's ephemeral resource storage
