@@ -8,7 +8,8 @@ import { AssetCard } from './AssetCard';
 import { Button } from './Button';
 import { ShotDetailModal } from './ShotDetailModal';
 import { VideoShotCard, WanGenerationSettings } from './VideoShotCard';
-import { generateWanVideo, generateAuroraVideo, validateFalApiKey, AuroraGenerationSettings } from '../services/falService';
+import { generateWanVideo, generateAuroraVideo, validateFalApiKey, AuroraGenerationSettings, uploadFileToFal } from '../services/falService';
+import { generateSeedanceVideo, SeedanceGenerationSettings, uploadFileToPiAPI } from '../services/seedanceService';
 import { MotionControl } from './MotionControl';
 import { Clapperboard, Settings, Users, MapPin, Film, ChevronRight, LayoutGrid, Plus, ChevronLeft, Home, Video, Play, Loader2, Download, AlertCircle, ImageIcon, MonitorPlay, Layers, Trash2, Edit3, ChevronDown, ChevronUp, Focus, FileText, Upload, CheckSquare, Square, Bot, Clock } from 'lucide-react';
 import { AIAgent } from './agent/AIAgent';
@@ -1437,6 +1438,99 @@ Style: ${project.settings.cinematographer}, shot on ${project.settings.filmStock
     });
   };
 
+  // Helper: Convert base64 data URL to a File object
+  const base64ToFile = (base64: string, filename: string): File => {
+    const parts = base64.split(',');
+    const mime = parts[0].match(/:(.*?);/)?.[1] || 'image/png';
+    const bstr = atob(parts[1]);
+    const u8arr = new Uint8Array(bstr.length);
+    for (let i = 0; i < bstr.length; i++) u8arr[i] = bstr.charCodeAt(i);
+    return new File([u8arr], filename, { type: mime });
+  };
+
+  // --- Seedance 2 Video Generation (PiAPI) ---
+  const handleGenerateSeedanceVideo = async (shotId: string, seedSettings: SeedanceGenerationSettings) => {
+    if (!activeSceneId) return;
+    const shot = currentShots.find(s => s.id === shotId);
+    if (!shot) return;
+
+    const videoSettings = project.videoSettings || DEFAULT_VIDEO_SETTINGS;
+    if (!videoSettings.piapiApiKey) {
+      console.error('PiAPI API key not configured');
+      updateSceneShots(activeSceneId, shots =>
+        shots.map(s => s.id === shotId ? { ...s, videoError: 'PiAPI API key not configured. Go to Settings tab.' } : s)
+      );
+      return;
+    }
+
+    updateSceneShots(activeSceneId, shots =>
+      shots.map(s => s.id === shotId ? { ...s, isVideoGenerating: true, videoError: undefined } : s)
+    );
+
+    try {
+      let promptToUse = shot.videoPrompt || synthesizeVideoPrompt(shot);
+      const finalSettings = { ...seedSettings };
+
+      // Auto-upload storyboard image for image-to-video if available
+      // Only if the user hasn't already manually set image URLs
+      if (shot.imageUrl && (!finalSettings.imageUrls || finalSettings.imageUrls.length === 0)) {
+        if (shot.imageUrl.startsWith('data:')) {
+          try {
+            // Upload base64 image to PiAPI's ephemeral storage (uses same PiAPI key)
+            console.log('Uploading storyboard image to PiAPI for Seedance image-to-video...');
+            const publicUrl = await uploadFileToPiAPI(shot.imageUrl, videoSettings.piapiApiKey);
+            finalSettings.imageUrls = [publicUrl];
+            // Prepend @image1 reference to prompt if not already present
+            if (!promptToUse.includes('@image1')) {
+              promptToUse = `The scene in @image1. ${promptToUse}`;
+            }
+            console.log('Storyboard image uploaded to PiAPI for Seedance:', publicUrl);
+          } catch (uploadErr) {
+            console.warn('Could not upload storyboard image to PiAPI, falling back to text-only:', uploadErr);
+          }
+        } else if (shot.imageUrl.startsWith('http')) {
+          // Already a public URL, use directly
+          finalSettings.imageUrls = [shot.imageUrl];
+          if (!promptToUse.includes('@image1')) {
+            promptToUse = `The scene in @image1. ${promptToUse}`;
+          }
+        }
+      }
+
+      const result = await generateSeedanceVideo(
+        promptToUse,
+        videoSettings.piapiApiKey,
+        finalSettings
+      );
+
+      const newSegment: VideoSegment = {
+        id: crypto.randomUUID(),
+        url: result.videoUrl,
+        timestamp: Date.now(),
+        model: seedSettings.taskType === 'seedance-2-preview' ? 'quality' : 'fast',
+        isExtension: false
+      };
+
+      const existingSegments = shot.videoSegments || [];
+
+      updateSceneShots(activeSceneId, shots =>
+        shots.map(s => s.id === shotId ? {
+          ...s,
+          isVideoGenerating: false,
+          videoUrl: result.videoUrl,
+          videoSegments: [...existingSegments, newSegment],
+          videoError: undefined
+        } : s)
+      );
+    } catch (e: any) {
+      console.error('Seedance video generation failed:', e);
+      const errorMessage = e.message || 'Seedance video generation failed';
+      updateSceneShots(activeSceneId, shots =>
+        shots.map(s => s.id === shotId ? { ...s, isVideoGenerating: false, videoError: errorMessage } : s)
+      );
+    }
+  };
+
   // --- Aurora Video Generation ---
   const handleGenerateAuroraVideo = async (shotId: string, auroraSettings: AuroraGenerationSettings) => {
     if (!activeSceneId) return;
@@ -1701,11 +1795,10 @@ Style: ${project.settings.cinematographer}, shot on ${project.settings.filmStock
             {/* SLOPBOT AI Agent Button */}
             <button
               onClick={() => setAgentOpen(v => !v)}
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-all border ${
-                agentOpen
-                  ? 'bg-red-600 text-white border-red-500 shadow-lg shadow-red-900/40'
-                  : 'bg-neutral-800 text-neutral-300 border-neutral-700 hover:border-red-600 hover:text-white'
-              }`}
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-all border ${agentOpen
+                ? 'bg-red-600 text-white border-red-500 shadow-lg shadow-red-900/40'
+                : 'bg-neutral-800 text-neutral-300 border-neutral-700 hover:border-red-600 hover:text-white'
+                }`}
               title="Open SLOPBOT AI Agent"
             >
               <Bot size={14} />
@@ -2064,6 +2157,7 @@ TIP: Select (highlight) a portion of text and click 'Analyze Scene' to analyze o
                     onGenerate={handleGenerateVideo}
                     onGenerateWan={handleGenerateWanVideo}
                     onGenerateAurora={handleGenerateAuroraVideo}
+                    onGenerateSeedance={handleGenerateSeedanceVideo}
                     onExtend={handleExtendVideo}
                     onDownload={handleDownloadVideo}
                     onCaptureFrame={handleCaptureFrame}
@@ -2197,6 +2291,47 @@ TIP: Select (highlight) a portion of text and click 'Analyze Scene' to analyze o
                     Powers Gemini image generation + Veo video. Get yours from <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer" className="text-red-500 hover:underline">aistudio.google.com/apikey</a>
                   </p>
                 </div>
+
+                {/* PiAPI API Key (Seedance) */}
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-neutral-500 uppercase tracking-widest">
+                    PiAPI API Key <span className="text-neutral-600">(Seedance 2)</span>
+                  </label>
+                  <div className="flex gap-2">
+                    <input
+                      type="password"
+                      className={`flex-1 bg-neutral-800 border rounded-md p-3 text-sm text-white focus:ring-1 focus:ring-emerald-500 outline-none ${project.videoSettings?.piapiApiKey ? 'border-green-600' : 'border-neutral-700'}`}
+                      placeholder="Enter your PiAPI API key..."
+                      value={project.videoSettings?.piapiApiKey || ''}
+                      onChange={(e) => {
+                        setProject(p => ({
+                          ...p,
+                          videoSettings: { ...(p.videoSettings || DEFAULT_VIDEO_SETTINGS), piapiApiKey: e.target.value }
+                        }));
+                      }}
+                    />
+                    <Button
+                      variant={project.videoSettings?.piapiApiKey ? 'secondary' : 'primary'}
+                      onClick={() => {
+                        if (project.videoSettings?.piapiApiKey) {
+                          onSave(project);
+                        }
+                      }}
+                      disabled={!project.videoSettings?.piapiApiKey}
+                      className="whitespace-nowrap"
+                    >
+                      {project.videoSettings?.piapiApiKey ? '✓ Save' : 'Save Key'}
+                    </Button>
+                  </div>
+                  {project.videoSettings?.piapiApiKey && (
+                    <p className="text-xs text-green-500 flex items-center gap-1">
+                      <CheckSquare className="w-3 h-3" /> PiAPI key configured
+                    </p>
+                  )}
+                  <p className="text-xs text-neutral-600">
+                    Powers Seedance 2 video generation. Get yours from <a href="https://piapi.ai/dashboard" target="_blank" rel="noopener noreferrer" className="text-emerald-500 hover:underline">piapi.ai/dashboard</a>
+                  </p>
+                </div>
               </div>
 
               {/* Video Provider Selection */}
@@ -2206,7 +2341,7 @@ TIP: Select (highlight) a portion of text and click 'Analyze Scene' to analyze o
                   Default Video Provider
                 </h3>
                 <p className="text-xs text-neutral-500 mb-4">Sets the default provider for new shots. You can override per-shot in the Video tab.</p>
-                <div className="grid grid-cols-3 gap-4">
+                <div className="grid grid-cols-4 gap-4">
                   <button
                     onClick={() => setProject(p => ({ ...p, videoSettings: { ...(p.videoSettings || DEFAULT_VIDEO_SETTINGS), provider: 'veo' } }))}
                     className={`p-4 rounded-lg border-2 transition-all ${(project.videoSettings?.provider || 'veo') === 'veo'
@@ -2226,6 +2361,16 @@ TIP: Select (highlight) a portion of text and click 'Analyze Scene' to analyze o
                   >
                     <div className="font-bold text-sm mb-1">Wan v2.6 (fal.ai)</div>
                     <div className="text-xs text-neutral-500">Image-to-Video, 5-15s</div>
+                  </button>
+                  <button
+                    onClick={() => setProject(p => ({ ...p, videoSettings: { ...(p.videoSettings || DEFAULT_VIDEO_SETTINGS), provider: 'seedance' } }))}
+                    className={`p-4 rounded-lg border-2 transition-all ${project.videoSettings?.provider === 'seedance'
+                      ? 'border-emerald-600 bg-emerald-900/20 text-white'
+                      : 'border-neutral-700 bg-neutral-800/50 text-neutral-400 hover:border-neutral-500'
+                      }`}
+                  >
+                    <div className="font-bold text-sm mb-1">Seedance 2</div>
+                    <div className="text-xs text-neutral-500">PiAPI, 5-15s</div>
                   </button>
                   <button
                     onClick={() => setProject(p => ({ ...p, videoSettings: { ...(p.videoSettings || DEFAULT_VIDEO_SETTINGS), provider: 'fal-aurora' } }))}

@@ -40,11 +40,12 @@ export interface CinematicSettings {
   colorGrade: string;
 }
 
-export type VideoProvider = 'veo' | 'fal-wan' | 'fal-aurora';
+export type VideoProvider = 'veo' | 'fal-wan' | 'fal-aurora' | 'seedance';
 
 export interface VideoProviderSettings {
   provider: VideoProvider;
   falApiKey?: string;
+  piapiApiKey?: string;
   // Wan v2.6 specific settings
   wanResolution: '720p' | '1080p';
   wanDuration: '5' | '10' | '15';
@@ -60,6 +61,10 @@ export interface VideoProviderSettings {
   auroraAudioGuidanceScale: number;
   auroraAudioUrl?: string;
   auroraPrompt?: string;
+  // Seedance 2 (PiAPI) specific settings
+  seedanceTaskType: 'seedance-2-preview' | 'seedance-2-fast-preview';
+  seedanceDuration: 5 | 10 | 15;
+  seedanceAspectRatio: '16:9' | '9:16' | '4:3' | '3:4';
 }
 
 export interface TurnaroundImage {
@@ -202,4 +207,7 @@ export const DEFAULT_VIDEO_SETTINGS: VideoProviderSettings = {
   auroraResolution: '720p',
   auroraGuidanceScale: 1,
   auroraAudioGuidanceScale: 2,
+  seedanceTaskType: 'seedance-2-preview',
+  seedanceDuration: 5,
+  seedanceAspectRatio: '16:9',
 };

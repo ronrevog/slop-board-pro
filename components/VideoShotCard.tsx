@@ -2,6 +2,7 @@
 import React, { useState, useRef } from 'react';
 import { Shot, VideoSegment, VideoProviderSettings, DEFAULT_VIDEO_SETTINGS } from '../types';
 import { AuroraGenerationSettings, uploadFileToFal } from '../services/falService';
+import { SeedanceGenerationSettings } from '../services/seedanceService';
 import { Button } from './Button';
 import { Download, Loader2, Clapperboard, Video, ImageIcon, MonitorPlay, RefreshCw, Film, Play, AlertTriangle, X, Camera, Settings, ChevronDown, ChevronUp, CheckSquare, Square, Music, Upload, Mic, StopCircle, Trash2, Archive } from 'lucide-react';
 import JSZip from 'jszip';
@@ -27,6 +28,7 @@ interface VideoShotCardProps {
   onGenerate: (id: string, model: 'fast' | 'quality') => void;
   onGenerateWan: (id: string, settings: WanGenerationSettings, sourceVideoUrl?: string) => void;
   onGenerateAurora: (id: string, settings: AuroraGenerationSettings) => void;
+  onGenerateSeedance: (id: string, settings: SeedanceGenerationSettings) => void;
   onExtend: (id: string, model: 'fast' | 'quality') => void;
   onDownload: (shot: Shot, sceneName?: string) => void;
   onCaptureFrame: (id: string, imageDataUrl: string) => void;
@@ -44,6 +46,7 @@ export const VideoShotCard: React.FC<VideoShotCardProps> = ({
   onGenerate,
   onGenerateWan,
   onGenerateAurora,
+  onGenerateSeedance,
   onExtend,
   onDownload,
   onCaptureFrame,
@@ -151,11 +154,22 @@ export const VideoShotCard: React.FC<VideoShotCardProps> = ({
   };
 
   // Provider selection state per-shot (defaults to project setting or 'veo')
-  const [selectedProvider, setSelectedProvider] = useState<'veo' | 'wan' | 'aurora'>(() => {
+  const [selectedProvider, setSelectedProvider] = useState<'veo' | 'wan' | 'aurora' | 'seedance'>(() => {
+    if (projectVideoSettings?.provider === 'seedance') return 'seedance';
     if (projectVideoSettings?.provider === 'fal-aurora') return 'aurora';
     if (projectVideoSettings?.provider === 'fal-wan') return 'wan';
     return 'veo';
   });
+
+  // Seedance settings state (initialized from project settings)
+  const [seedanceSettings, setSeedanceSettings] = useState<SeedanceGenerationSettings>({
+    taskType: projectVideoSettings?.seedanceTaskType || 'seedance-2-preview',
+    duration: projectVideoSettings?.seedanceDuration || 5,
+    aspectRatio: projectVideoSettings?.seedanceAspectRatio || '16:9',
+  });
+
+  // Show/hide Seedance settings panel
+  const [showSeedanceSettings, setShowSeedanceSettings] = useState(false);
 
   // Aurora settings state (initialized from project settings)
   const [auroraSettings, setAuroraSettings] = useState<AuroraGenerationSettings>({
@@ -456,20 +470,21 @@ export const VideoShotCard: React.FC<VideoShotCardProps> = ({
             {/* Loading Overlay */}
             {(shot.isVideoGenerating || shot.isExtending) && (
               <div className="absolute inset-0 bg-black/80 flex flex-col items-center justify-center z-20 backdrop-blur-sm">
-                <Loader2 className={`w-12 h-12 animate-spin mb-4 ${selectedProvider === 'wan' ? 'text-orange-500' : selectedProvider === 'aurora' ? 'text-purple-500' : 'text-red-600'
+                <Loader2 className={`w-12 h-12 animate-spin mb-4 ${selectedProvider === 'wan' ? 'text-orange-500' : selectedProvider === 'aurora' ? 'text-purple-500' : selectedProvider === 'seedance' ? 'text-emerald-500' : 'text-red-600'
                   }`} />
                 <div className="text-white font-serif text-xl tracking-wide">
                   {shot.isExtending ? 'Extending Video...' : 'Generating Video...'}
                 </div>
-                <div className={`text-xs mt-2 uppercase tracking-widest ${selectedProvider === 'wan' ? 'text-orange-400' : selectedProvider === 'aurora' ? 'text-purple-400' : 'text-neutral-400'
+                <div className={`text-xs mt-2 uppercase tracking-widest ${selectedProvider === 'wan' ? 'text-orange-400' : selectedProvider === 'aurora' ? 'text-purple-400' : selectedProvider === 'seedance' ? 'text-emerald-400' : 'text-neutral-400'
                   }`}>
                   {selectedProvider === 'wan' ? 'Wan v2.6 (fal.ai)'
                     : selectedProvider === 'aurora' ? 'Lip Sync — Aurora (fal.ai)'
-                      : videoModelLabel}
+                      : selectedProvider === 'seedance' ? 'Seedance 2 (PiAPI)'
+                        : videoModelLabel}
                 </div>
                 {/* Indeterminate progress bar */}
                 <div className="w-48 mt-4 bg-neutral-800 rounded-full h-1.5 overflow-hidden">
-                  <div className={`h-full rounded-full animate-indeterminate-progress ${selectedProvider === 'wan' ? 'bg-orange-500' : selectedProvider === 'aurora' ? 'bg-purple-500' : 'bg-red-600'
+                  <div className={`h-full rounded-full animate-indeterminate-progress ${selectedProvider === 'wan' ? 'bg-orange-500' : selectedProvider === 'aurora' ? 'bg-purple-500' : selectedProvider === 'seedance' ? 'bg-emerald-500' : 'bg-red-600'
                     }`}
                     style={{ width: '40%' }}
                   />
@@ -695,7 +710,7 @@ export const VideoShotCard: React.FC<VideoShotCardProps> = ({
               <label className="text-xs font-bold text-neutral-400 uppercase tracking-widest flex items-center gap-2">
                 <Video className="w-3 h-3" /> Video Provider
               </label>
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-4 gap-2">
                 <button
                   onClick={() => setSelectedProvider('veo')}
                   className={`px-2 py-2 rounded-lg border-2 text-xs font-medium transition-all ${selectedProvider === 'veo'
@@ -703,7 +718,7 @@ export const VideoShotCard: React.FC<VideoShotCardProps> = ({
                     : 'border-neutral-700 bg-neutral-800/50 text-neutral-400 hover:border-neutral-500'
                     }`}
                 >
-                  Veo (Google)
+                  Veo
                 </button>
                 <button
                   onClick={() => setSelectedProvider('wan')}
@@ -713,6 +728,15 @@ export const VideoShotCard: React.FC<VideoShotCardProps> = ({
                     }`}
                 >
                   Wan v2.6
+                </button>
+                <button
+                  onClick={() => setSelectedProvider('seedance')}
+                  className={`px-2 py-2 rounded-lg border-2 text-xs font-medium transition-all ${selectedProvider === 'seedance'
+                    ? 'border-emerald-600 bg-emerald-900/20 text-white'
+                    : 'border-neutral-700 bg-neutral-800/50 text-neutral-400 hover:border-neutral-500'
+                    }`}
+                >
+                  Seedance
                 </button>
                 <button
                   onClick={() => setSelectedProvider('aurora')}
@@ -901,6 +925,114 @@ export const VideoShotCard: React.FC<VideoShotCardProps> = ({
                   className="w-full h-12 bg-orange-600 hover:bg-orange-700"
                 >
                   {shot.videoUrl ? `Regenerate (${wanSettings.duration}s)` : `Generate Wan (${wanSettings.duration}s)`}
+                </Button>
+              </div>
+            )}
+
+            {/* Seedance 2 Settings & Generate */}
+            {selectedProvider === 'seedance' && (
+              <div className="space-y-3 animate-fade-in">
+                {/* Seedance Settings Toggle */}
+                <button
+                  onClick={() => setShowSeedanceSettings(!showSeedanceSettings)}
+                  className="w-full flex items-center justify-between px-3 py-2 bg-neutral-800/50 border border-neutral-700 rounded-lg text-sm text-neutral-300 hover:bg-neutral-800 transition-colors"
+                >
+                  <span className="flex items-center gap-2">
+                    <Settings className="w-3 h-3" /> Seedance 2 Settings
+                  </span>
+                  {showSeedanceSettings ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                </button>
+
+                {/* Seedance Settings Panel */}
+                {showSeedanceSettings && (
+                  <div className="bg-neutral-800/30 border border-neutral-700 rounded-lg p-3 space-y-3 animate-fade-in">
+                    {/* Model & Duration Row */}
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="space-y-1">
+                        <label className="text-[10px] text-neutral-500 uppercase">Model</label>
+                        <select
+                          className="w-full bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs text-white"
+                          value={seedanceSettings.taskType}
+                          onChange={(e) => setSeedanceSettings(s => ({ ...s, taskType: e.target.value as any }))}
+                        >
+                          <option value="seedance-2-preview">Quality ($0.15/s)</option>
+                          <option value="seedance-2-fast-preview">Fast ($0.08/s)</option>
+                        </select>
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-[10px] text-neutral-500 uppercase">Duration</label>
+                        <select
+                          className="w-full bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs text-white"
+                          value={seedanceSettings.duration}
+                          onChange={(e) => setSeedanceSettings(s => ({ ...s, duration: parseInt(e.target.value) as 5 | 10 | 15 }))}
+                        >
+                          <option value="5">5 sec</option>
+                          <option value="10">10 sec</option>
+                          <option value="15">15 sec</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    {/* Aspect Ratio */}
+                    <div className="space-y-1">
+                      <label className="text-[10px] text-neutral-500 uppercase">Aspect Ratio</label>
+                      <select
+                        className="w-full bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs text-white"
+                        value={seedanceSettings.aspectRatio}
+                        onChange={(e) => setSeedanceSettings(s => ({ ...s, aspectRatio: e.target.value as any }))}
+                      >
+                        <option value="16:9">16:9 (Landscape)</option>
+                        <option value="9:16">9:16 (Portrait)</option>
+                        <option value="4:3">4:3 (Classic)</option>
+                        <option value="3:4">3:4 (Portrait Classic)</option>
+                      </select>
+                    </div>
+
+                    {/* Image URL Input */}
+                    <div className="space-y-1">
+                      <label className="text-[10px] text-neutral-500 uppercase">Image Reference URL (optional)</label>
+                      <input
+                        type="url"
+                        className="w-full bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs text-white placeholder-neutral-600"
+                        placeholder="https://... (use @image1 in prompt)"
+                        value={seedanceSettings.imageUrls?.[0] || ''}
+                        onChange={(e) => setSeedanceSettings(s => ({
+                          ...s,
+                          imageUrls: e.target.value ? [e.target.value] : undefined
+                        }))}
+                      />
+                      <p className="text-[9px] text-neutral-600">
+                        Use @image1 in prompt to reference. Must be a public URL.
+                      </p>
+                    </div>
+
+                    {/* Pricing Info */}
+                    <div className="text-[9px] text-neutral-600 bg-neutral-800/50 rounded p-2">
+                      <p>💰 Est. cost: <span className="text-emerald-400 font-mono">
+                        ${(seedanceSettings.duration * (seedanceSettings.taskType === 'seedance-2-preview' ? 0.15 : 0.08)).toFixed(2)}
+                      </span></p>
+                      <p className="mt-1">⏰ Peak hours (09:00-15:00 GMT): Queue times may be longer</p>
+                    </div>
+                  </div>
+                )}
+
+                {/* API Key Warning */}
+                {!projectVideoSettings?.piapiApiKey && (
+                  <div className="text-xs text-emerald-400 bg-emerald-900/20 border border-emerald-900/30 rounded px-2 py-1">
+                    ⚠️ Add PiAPI API key in Project Settings
+                  </div>
+                )}
+
+                {/* Generate Button */}
+                <Button
+                  variant="primary"
+                  onClick={() => onGenerateSeedance(shot.id, seedanceSettings)}
+                  disabled={shot.isVideoGenerating || shot.isExtending || !projectVideoSettings?.piapiApiKey}
+                  className="w-full h-12 bg-emerald-600 hover:bg-emerald-700"
+                >
+                  {shot.videoUrl
+                    ? `Regen Seedance (${seedanceSettings.duration}s)`
+                    : `Generate Seedance (${seedanceSettings.duration}s)`}
                 </Button>
               </div>
             )}
