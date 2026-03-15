@@ -969,43 +969,45 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({ project, onUpdat
 
           {/* Program Monitor */}
           <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
-            <div className="flex-1 relative bg-black overflow-hidden flex items-center justify-center min-h-0 min-w-0">
-              {/* Video element — flex-centered, max constrained to fit */}
-              <video
-                ref={programVideoRef}
-                className="max-w-full max-h-full object-contain"
-                style={{
-                  display: currentClip?.videoUrl ? 'block' : 'none',
-                  opacity: currentClip?.videoUrl ? (currentClip.opacity ?? 1) : 0,
-                  pointerEvents: 'none',
-                }}
-                src={currentClip?.videoUrl || ''}
-                muted={isMuted}
-                playsInline
-                preload="auto"
-              />
-              {/* Show image if clip has image but no video */}
-              {currentClip && !currentClip.videoUrl && currentClip.imageUrl && (
-                <img src={currentClip.imageUrl} alt={currentClip.label}
-                  className="max-w-full max-h-full object-contain"
-                  style={{ opacity: currentClip.opacity ?? 1 }}
-                  draggable={false} />
-              )}
-              {!currentClip && (
-                <div className="flex flex-col items-center justify-center gap-3 text-neutral-700">
-                  <Film size={36} strokeWidth={1} />
-                  <span className="text-sm text-center px-4">
-                    {clips.length === 0 ? 'Insert clips from the Source Monitor' : 'Move playhead over a clip to preview'}
-                  </span>
-                </div>
-              )}
-              {/* Overlay elements positioned absolutely over the video area */}
-              <div className="absolute bottom-2 left-1/2 -translate-x-1/2 bg-black/70 px-3 py-1 rounded font-mono text-sm text-white tracking-widest pointer-events-none">
+            <div className="flex-1 relative bg-black overflow-hidden">
+              {/* Absolute inner container — breaks video out of flex flow, prevents inflation */}
+              <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <video
+                  ref={programVideoRef}
+                  style={{
+                    maxWidth: '100%',
+                    maxHeight: '100%',
+                    objectFit: 'contain',
+                    display: currentClip?.videoUrl ? 'block' : 'none',
+                    opacity: currentClip?.videoUrl ? (currentClip.opacity ?? 1) : 0,
+                    pointerEvents: 'none',
+                  }}
+                  src={currentClip?.videoUrl || ''}
+                  muted={isMuted}
+                  playsInline
+                  preload="auto"
+                />
+                {currentClip && !currentClip.videoUrl && currentClip.imageUrl && (
+                  <img src={currentClip.imageUrl} alt={currentClip.label}
+                    style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', opacity: currentClip.opacity ?? 1 }}
+                    draggable={false} />
+                )}
+                {!currentClip && (
+                  <div className="flex flex-col items-center justify-center gap-3 text-neutral-700">
+                    <Film size={36} strokeWidth={1} />
+                    <span className="text-sm text-center px-4">
+                      {clips.length === 0 ? 'Insert clips from the Source Monitor' : 'Move playhead over a clip to preview'}
+                    </span>
+                  </div>
+                )}
+              </div>
+              {/* Overlay HUD — absolute on the outer container */}
+              <div className="absolute bottom-2 left-1/2 -translate-x-1/2 bg-black/70 px-3 py-1 rounded font-mono text-sm text-white tracking-widest pointer-events-none z-10">
                 {framesToTimecode(playheadFrame)}
               </div>
-              {currentClip && <div className="absolute top-2 left-2 bg-black/60 text-neutral-300 text-xs px-2 py-0.5 rounded pointer-events-none">{currentClip.label}</div>}
+              {currentClip && <div className="absolute top-2 left-2 bg-black/60 text-neutral-300 text-xs px-2 py-0.5 rounded pointer-events-none z-10">{currentClip.label}</div>}
               {isPlaying && (
-                <div className="absolute top-2 right-2 flex items-center gap-1 bg-red-600/80 text-white text-xs px-2 py-0.5 rounded pointer-events-none">
+                <div className="absolute top-2 right-2 flex items-center gap-1 bg-red-600/80 text-white text-xs px-2 py-0.5 rounded pointer-events-none z-10">
                   <div className="w-1.5 h-1.5 bg-white rounded-full animate-pulse" /> PLAYING
                 </div>
               )}
