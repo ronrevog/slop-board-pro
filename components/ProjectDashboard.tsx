@@ -280,7 +280,7 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
 
       {/* Footer */}
       <div className="max-w-7xl mx-auto mt-12 pt-6 border-t border-neutral-800/50 text-center text-neutral-600 text-sm">
-        Version 1.1
+        Version 1.2.1
       </div>
     </div>
   );
