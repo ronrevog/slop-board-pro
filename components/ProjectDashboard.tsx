@@ -141,6 +141,7 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
             <h1 className="text-4xl md:text-5xl font-serif font-bold text-white tracking-tight flex items-center gap-3">
               <Film className="w-10 h-10 text-red-600" />
               Slop Board
+              <span className="text-xs font-normal text-neutral-600 ml-2">v1.3.0</span>
             </h1>
             <p className="text-neutral-500 uppercase tracking-widest text-sm font-medium">Cinematic Project Manager</p>
           </div>
@@ -280,7 +281,7 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
 
       {/* Footer */}
       <div className="max-w-7xl mx-auto mt-12 pt-6 border-t border-neutral-800/50 text-center text-neutral-600 text-sm">
-        Version 1.2.4
+        Version 1.3.0
       </div>
     </div>
   );
