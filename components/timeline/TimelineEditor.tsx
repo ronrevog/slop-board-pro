@@ -968,13 +968,14 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({ project, onUpdat
           </div>
 
           {/* Program Monitor */}
-          <div className="flex-1 flex flex-col min-h-0">
-            <div className="flex-1 relative bg-black overflow-hidden">
-              {/* Video element — always mounted, absolutely positioned to fill and center */}
+          <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+            <div className="flex-1 relative bg-black overflow-hidden flex items-center justify-center min-h-0 min-w-0">
+              {/* Video element — flex-centered, max constrained to fit */}
               <video
                 ref={programVideoRef}
-                className="absolute inset-0 w-full h-full object-contain"
+                className="max-w-full max-h-full object-contain"
                 style={{
+                  display: currentClip?.videoUrl ? 'block' : 'none',
                   opacity: currentClip?.videoUrl ? (currentClip.opacity ?? 1) : 0,
                   pointerEvents: 'none',
                 }}
@@ -985,23 +986,26 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({ project, onUpdat
               />
               {/* Show image if clip has image but no video */}
               {currentClip && !currentClip.videoUrl && currentClip.imageUrl && (
-                <img src={currentClip.imageUrl} alt={currentClip.label} className="absolute inset-0 w-full h-full object-contain"
-                  style={{ opacity: currentClip.opacity ?? 1 }} draggable={false} />
+                <img src={currentClip.imageUrl} alt={currentClip.label}
+                  className="max-w-full max-h-full object-contain"
+                  style={{ opacity: currentClip.opacity ?? 1 }}
+                  draggable={false} />
               )}
               {!currentClip && (
-                <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-neutral-700">
+                <div className="flex flex-col items-center justify-center gap-3 text-neutral-700">
                   <Film size={36} strokeWidth={1} />
                   <span className="text-sm text-center px-4">
                     {clips.length === 0 ? 'Insert clips from the Source Monitor' : 'Move playhead over a clip to preview'}
                   </span>
                 </div>
               )}
-              <div className="absolute bottom-2 left-1/2 -translate-x-1/2 bg-black/70 px-3 py-1 rounded font-mono text-sm text-white tracking-widest">
+              {/* Overlay elements positioned absolutely over the video area */}
+              <div className="absolute bottom-2 left-1/2 -translate-x-1/2 bg-black/70 px-3 py-1 rounded font-mono text-sm text-white tracking-widest pointer-events-none">
                 {framesToTimecode(playheadFrame)}
               </div>
-              {currentClip && <div className="absolute top-2 left-2 bg-black/60 text-neutral-300 text-xs px-2 py-0.5 rounded">{currentClip.label}</div>}
+              {currentClip && <div className="absolute top-2 left-2 bg-black/60 text-neutral-300 text-xs px-2 py-0.5 rounded pointer-events-none">{currentClip.label}</div>}
               {isPlaying && (
-                <div className="absolute top-2 right-2 flex items-center gap-1 bg-red-600/80 text-white text-xs px-2 py-0.5 rounded">
+                <div className="absolute top-2 right-2 flex items-center gap-1 bg-red-600/80 text-white text-xs px-2 py-0.5 rounded pointer-events-none">
                   <div className="w-1.5 h-1.5 bg-white rounded-full animate-pulse" /> PLAYING
                 </div>
               )}
