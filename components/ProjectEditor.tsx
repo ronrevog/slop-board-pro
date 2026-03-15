@@ -58,6 +58,51 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ initialProject, on
     localStorage.getItem('gemini_api_key') ? 'saved' : 'idle'
   );
 
+  // Master API key save status
+  const [masterKeySaved, setMasterKeySaved] = useState(false);
+
+  // Auto-populate API keys from localStorage on mount (so keys persist across projects/sessions)
+  useEffect(() => {
+    const savedFalKey = localStorage.getItem('slop_fal_api_key');
+    const savedPiapiKey = localStorage.getItem('slop_piapi_api_key');
+    let needsUpdate = false;
+
+    setProject(prev => {
+      const vs = prev.videoSettings || DEFAULT_VIDEO_SETTINGS;
+      const newFal = !vs.falApiKey && savedFalKey ? savedFalKey : vs.falApiKey;
+      const newPiapi = !vs.piapiApiKey && savedPiapiKey ? savedPiapiKey : vs.piapiApiKey;
+      if (newFal !== vs.falApiKey || newPiapi !== vs.piapiApiKey) {
+        needsUpdate = true;
+        return { ...prev, videoSettings: { ...vs, falApiKey: newFal, piapiApiKey: newPiapi } };
+      }
+      return prev;
+    });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Save all API keys to localStorage
+  const handleSaveAllApiKeys = () => {
+    // Google key
+    if (googleApiKey.trim()) {
+      localStorage.setItem('gemini_api_key', googleApiKey.trim());
+      setGoogleKeyStatus('saved');
+    }
+    // fal.ai key
+    const falKey = project.videoSettings?.falApiKey;
+    if (falKey?.trim()) {
+      localStorage.setItem('slop_fal_api_key', falKey.trim());
+      setFalKeyStatus('valid');
+    }
+    // PiAPI key
+    const piapiKey = project.videoSettings?.piapiApiKey;
+    if (piapiKey?.trim()) {
+      localStorage.setItem('slop_piapi_api_key', piapiKey.trim());
+    }
+    // Save project too
+    onSave(project);
+    setMasterKeySaved(true);
+    setTimeout(() => setMasterKeySaved(false), 3000);
+  };
+
   // PDF Upload State
   const [isUploadingPDF, setIsUploadingPDF] = useState(false);
   const [isStandardScreenplayFormat, setIsStandardScreenplayFormat] = useState(true);
@@ -2402,6 +2447,20 @@ TIP: Select (highlight) a portion of text and click 'Analyze Scene' to analyze o
                   )}
                   <p className="text-xs text-neutral-600">
                     Powers Seedance 2 video generation. Get yours from <a href="https://piapi.ai/dashboard" target="_blank" rel="noopener noreferrer" className="text-emerald-500 hover:underline">piapi.ai/dashboard</a>
+                  </p>
+                </div>
+
+                {/* Master Save All Keys */}
+                <div className="pt-4 border-t border-neutral-700">
+                  <Button
+                    variant={masterKeySaved ? 'secondary' : 'primary'}
+                    onClick={handleSaveAllApiKeys}
+                    className="w-full h-12"
+                  >
+                    {masterKeySaved ? '✓ All API Keys Saved to Browser' : '💾 Save All API Keys (Persists Across Sessions)'}
+                  </Button>
+                  <p className="text-xs text-neutral-600 mt-2 text-center">
+                    Saves all keys to your browser's local storage so they auto-fill when you open any project.
                   </p>
                 </div>
               </div>
