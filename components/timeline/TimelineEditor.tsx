@@ -969,14 +969,13 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({ project, onUpdat
 
           {/* Program Monitor */}
           <div className="flex-1 flex flex-col min-h-0">
-            <div className="flex-1 relative bg-black flex items-center justify-center overflow-hidden">
-              {/* Hidden video element — always mounted, src changes based on current clip */}
+            <div className="flex-1 relative bg-black overflow-hidden">
+              {/* Video element — always mounted, absolutely positioned to fill and center */}
               <video
                 ref={programVideoRef}
-                className="max-w-full max-h-full object-contain"
+                className="absolute inset-0 w-full h-full object-contain"
                 style={{
                   opacity: currentClip?.videoUrl ? (currentClip.opacity ?? 1) : 0,
-                  position: currentClip?.videoUrl ? 'relative' : 'absolute',
                   pointerEvents: 'none',
                 }}
                 src={currentClip?.videoUrl || ''}
@@ -984,13 +983,13 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({ project, onUpdat
                 playsInline
                 preload="auto"
               />
-              {/* Show image if clip has image but no video, or no clip at all */}
+              {/* Show image if clip has image but no video */}
               {currentClip && !currentClip.videoUrl && currentClip.imageUrl && (
-                <img src={currentClip.imageUrl} alt={currentClip.label} className="max-w-full max-h-full object-contain"
+                <img src={currentClip.imageUrl} alt={currentClip.label} className="absolute inset-0 w-full h-full object-contain"
                   style={{ opacity: currentClip.opacity ?? 1 }} draggable={false} />
               )}
               {!currentClip && (
-                <div className="flex flex-col items-center gap-3 text-neutral-700">
+                <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-neutral-700">
                   <Film size={36} strokeWidth={1} />
                   <span className="text-sm text-center px-4">
                     {clips.length === 0 ? 'Insert clips from the Source Monitor' : 'Move playhead over a clip to preview'}
