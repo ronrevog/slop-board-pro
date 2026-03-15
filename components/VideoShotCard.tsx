@@ -29,6 +29,7 @@ interface VideoShotCardProps {
   onGenerateWan: (id: string, settings: WanGenerationSettings, sourceVideoUrl?: string) => void;
   onGenerateAurora: (id: string, settings: AuroraGenerationSettings) => void;
   onGenerateSeedance: (id: string, settings: SeedanceGenerationSettings) => void;
+  onExtendSeedance: (id: string, settings: SeedanceGenerationSettings) => void;
   onExtend: (id: string, model: 'fast' | 'quality') => void;
   onDownload: (shot: Shot, sceneName?: string) => void;
   onCaptureFrame: (id: string, imageDataUrl: string) => void;
@@ -47,6 +48,7 @@ export const VideoShotCard: React.FC<VideoShotCardProps> = ({
   onGenerateWan,
   onGenerateAurora,
   onGenerateSeedance,
+  onExtendSeedance,
   onExtend,
   onDownload,
   onCaptureFrame,
@@ -1301,6 +1303,29 @@ export const VideoShotCard: React.FC<VideoShotCardProps> = ({
                 </div>
               </div>
             )}
+
+            {/* Extend Video - Seedance */}
+            {shot.videoUrl && selectedProvider === 'seedance' && (() => {
+              const lastSeedanceTaskId = [...(shot.videoSegments || [])].reverse().find(s => s.seedanceTaskId)?.seedanceTaskId;
+              return lastSeedanceTaskId ? (
+                <div className="space-y-2 pt-4 border-t border-neutral-800 animate-fade-in">
+                  <label className="text-xs font-bold text-emerald-400 uppercase tracking-widest flex items-center gap-2">
+                    <MonitorPlay className="w-3 h-3" /> Extend Video (Seedance)
+                  </label>
+                  <p className="text-[9px] text-neutral-500">
+                    Continues from the last Seedance-generated segment using parent_task_id.
+                  </p>
+                  <Button
+                    variant="outline"
+                    onClick={() => onExtendSeedance(shot.id, seedanceSettings)}
+                    disabled={shot.isVideoGenerating || shot.isExtending}
+                    className="w-full h-10 text-xs border-emerald-700 hover:bg-emerald-900/30 text-emerald-300"
+                  >
+                    Extend Seedance ({seedanceSettings.duration}s)
+                  </Button>
+                </div>
+              ) : null;
+            })()}
           </div>
 
         </div>

@@ -1506,6 +1506,7 @@ Style: ${project.settings.cinematographer}, shot on ${project.settings.filmStock
       const newSegment: VideoSegment = {
         id: crypto.randomUUID(),
         url: result.videoUrl,
+        seedanceTaskId: result.taskId,
         timestamp: Date.now(),
         model: seedSettings.taskType === 'seedance-2-preview' ? 'quality' : 'fast',
         isExtension: false
@@ -1527,6 +1528,76 @@ Style: ${project.settings.cinematographer}, shot on ${project.settings.filmStock
       const errorMessage = e.message || 'Seedance video generation failed';
       updateSceneShots(activeSceneId, shots =>
         shots.map(s => s.id === shotId ? { ...s, isVideoGenerating: false, videoError: errorMessage } : s)
+      );
+    }
+  };
+
+  // --- Seedance 2 Extend Video ---
+  const handleExtendSeedanceVideo = async (shotId: string, seedSettings: SeedanceGenerationSettings) => {
+    if (!activeSceneId) return;
+    const shot = currentShots.find(s => s.id === shotId);
+    if (!shot || !shot.videoSegments) return;
+
+    // Find the last segment with a seedanceTaskId
+    const lastSeedanceSegment = [...shot.videoSegments].reverse().find(s => s.seedanceTaskId);
+    if (!lastSeedanceSegment?.seedanceTaskId) {
+      console.error('No Seedance task ID found for extension');
+      updateSceneShots(activeSceneId, shots =>
+        shots.map(s => s.id === shotId ? { ...s, videoError: 'No Seedance task ID found. Generate a Seedance video first.' } : s)
+      );
+      return;
+    }
+
+    const videoSettings = project.videoSettings || DEFAULT_VIDEO_SETTINGS;
+    if (!videoSettings.piapiApiKey) {
+      console.error('PiAPI API key not configured');
+      return;
+    }
+
+    updateSceneShots(activeSceneId, shots =>
+      shots.map(s => s.id === shotId ? { ...s, isExtending: true, videoError: undefined } : s)
+    );
+
+    try {
+      // Use parent_task_id to extend the video
+      const extendSettings: SeedanceGenerationSettings = {
+        ...seedSettings,
+        parentTaskId: lastSeedanceSegment.seedanceTaskId,
+      };
+
+      const promptToUse = shot.videoPrompt || synthesizeVideoPrompt(shot);
+
+      const result = await generateSeedanceVideo(
+        promptToUse,
+        videoSettings.piapiApiKey,
+        extendSettings
+      );
+
+      const newSegment: VideoSegment = {
+        id: crypto.randomUUID(),
+        url: result.videoUrl,
+        seedanceTaskId: result.taskId,
+        timestamp: Date.now(),
+        model: seedSettings.taskType === 'seedance-2-preview' ? 'quality' : 'fast',
+        isExtension: true
+      };
+
+      const existingSegments = shot.videoSegments || [];
+
+      updateSceneShots(activeSceneId, shots =>
+        shots.map(s => s.id === shotId ? {
+          ...s,
+          isExtending: false,
+          videoUrl: result.videoUrl,
+          videoSegments: [...existingSegments, newSegment],
+          videoError: undefined
+        } : s)
+      );
+    } catch (e: any) {
+      console.error('Seedance video extension failed:', e);
+      const errorMessage = e.message || 'Seedance video extension failed';
+      updateSceneShots(activeSceneId, shots =>
+        shots.map(s => s.id === shotId ? { ...s, isExtending: false, videoError: errorMessage } : s)
       );
     }
   };
@@ -2158,6 +2229,7 @@ TIP: Select (highlight) a portion of text and click 'Analyze Scene' to analyze o
                     onGenerateWan={handleGenerateWanVideo}
                     onGenerateAurora={handleGenerateAuroraVideo}
                     onGenerateSeedance={handleGenerateSeedanceVideo}
+                    onExtendSeedance={handleExtendSeedanceVideo}
                     onExtend={handleExtendVideo}
                     onDownload={handleDownloadVideo}
                     onCaptureFrame={handleCaptureFrame}

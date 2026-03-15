@@ -134,6 +134,7 @@ export interface VideoSegment {
   timestamp: number;
   model: 'fast' | 'quality';
   isExtension: boolean; // true if this segment was created by extending
+  seedanceTaskId?: string; // PiAPI task ID for Seedance extend
 }
 
 export interface ImageHistoryEntry {
