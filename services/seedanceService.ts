@@ -54,6 +54,34 @@ const PIAPI_BASE_URL = isDev ? '/piapi-api' : 'https://api.piapi.ai';
 const PIAPI_UPLOAD_URL = isDev ? '/piapi-upload' : '/api/piapi-upload';
 
 /**
+ * Compress a base64 image to fit within size limits
+ * Resizes to max 1024px dimension and compresses as JPEG
+ */
+const compressImage = (base64DataUrl: string, maxDim = 1024, quality = 0.8): Promise<string> => {
+    return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => {
+            let { width, height } = img;
+            // Scale down if needed
+            if (width > maxDim || height > maxDim) {
+                const ratio = Math.min(maxDim / width, maxDim / height);
+                width = Math.round(width * ratio);
+                height = Math.round(height * ratio);
+            }
+            const canvas = document.createElement('canvas');
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            if (!ctx) { reject(new Error('Canvas context failed')); return; }
+            ctx.drawImage(img, 0, 0, width, height);
+            resolve(canvas.toDataURL('image/jpeg', quality));
+        };
+        img.onerror = () => reject(new Error('Image load failed'));
+        img.src = base64DataUrl;
+    });
+};
+
+/**
  * Upload a file to PiAPI's ephemeral resource storage
  * Returns a public URL that can be used in image_urls
  */
@@ -61,9 +89,10 @@ export const uploadFileToPiAPI = async (
     base64DataUrl: string,
     apiKey: string
 ): Promise<string> => {
-    // PiAPI upload expects: { file_name: "xxx.png", file_data: "data:image/png;base64,..." }
-    const mime = base64DataUrl.match(/data:(.*?);/)?.[1] || 'image/png';
-    const ext = mime.includes('png') ? 'png' : mime.includes('webp') ? 'webp' : 'jpg';
+    // Compress image to avoid Vercel payload limits (~4.5MB)
+    console.log('Compressing image for upload...');
+    const compressed = await compressImage(base64DataUrl);
+    console.log(`Image compressed: ${Math.round(base64DataUrl.length / 1024)}KB → ${Math.round(compressed.length / 1024)}KB`);
 
     const response = await fetch(PIAPI_UPLOAD_URL, {
         method: 'POST',
@@ -72,8 +101,8 @@ export const uploadFileToPiAPI = async (
             'x-api-key': apiKey,
         },
         body: JSON.stringify({
-            file_name: `storyboard.${ext}`,
-            file_data: base64DataUrl, // Full data URI: data:image/png;base64,...
+            file_name: 'storyboard.jpg',
+            file_data: compressed,
         }),
     });
 
