@@ -1,5 +1,36 @@
 @import "tailwindcss";
 
+/* Program Monitor video containment — forces video to stay within bounds */
+.program-monitor-viewport {
+    position: relative !important;
+    overflow: hidden !important;
+    background: #000 !important;
+}
+
+.program-monitor-viewport>.program-monitor-media-wrapper {
+    position: absolute !important;
+    top: 0 !important;
+    left: 0 !important;
+    right: 0 !important;
+    bottom: 0 !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    overflow: hidden !important;
+}
+
+.program-monitor-media-wrapper video {
+    width: 100% !important;
+    height: 100% !important;
+    object-fit: contain !important;
+}
+
+.program-monitor-media-wrapper img {
+    max-width: 100% !important;
+    max-height: 100% !important;
+    object-fit: contain !important;
+}
+
 body {
     font-family: 'Inter', sans-serif;
     background-color: #0a0a0a;

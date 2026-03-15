@@ -1033,8 +1033,69 @@ CRITICAL: This must look like a DIFFERENT CAMERA ANGLE of the SAME SCENE - not a
     } else {
       // NO REFERENCE - normal generation with reference images for consistency
       const hasUserRefPhotos = shot.referenceImages && shot.referenceImages.length > 0;
+      const hasComposeRefs = !!(shot.sceneReferenceImage || shot.characterReferenceImage);
+      const hasFullCompose = !!(shot.sceneReferenceImage && shot.characterReferenceImage);
 
-      // 1. USER REFERENCE PHOTOS FIRST — highest priority, model sees these before anything else
+      // 0. COMPOSE MODE — Scene Reference + Character Reference
+      // When both are present: explicit compositing instruction
+      // When only one is present: use as highest-priority reference
+      if (hasFullCompose) {
+        // Scene background first
+        parts.push({
+          inlineData: {
+            mimeType: getMimeType(shot.sceneReferenceImage!),
+            data: stripBase64Header(shot.sceneReferenceImage!)
+          }
+        });
+        parts.push({
+          text: `⚡ COMPOSE_SCENE_REFERENCE (HIGHEST PRIORITY): This is the BACKGROUND / ENVIRONMENT for this shot.
+You MUST reproduce this exact location: same architecture, furniture, walls, lighting, atmosphere, colors.
+Do NOT invent a different environment. Use THIS scene as the setting.`
+        });
+
+        // Character to composite in
+        parts.push({
+          inlineData: {
+            mimeType: getMimeType(shot.characterReferenceImage!),
+            data: stripBase64Header(shot.characterReferenceImage!)
+          }
+        });
+        parts.push({
+          text: `⚡ COMPOSE_CHARACTER_REFERENCE (HIGHEST PRIORITY): This is the CHARACTER / PERSON to place into the scene above.
+CRITICAL COMPOSITING INSTRUCTIONS:
+- Take THIS exact person (face, hair, skin tone, body type, clothing) from this photo
+- Place them into the SCENE_REFERENCE environment above
+- The character must look like they naturally belong in that scene
+- Match the lighting direction and color temperature of the scene
+- Apply the shot framing: ${shot.shotType} shot, ${shot.cameraMove} camera move
+- Action happening: ${shot.action || shot.description}
+- The result must look like a professional film still — NOT a photoshop cutout`
+        });
+      } else if (shot.sceneReferenceImage) {
+        parts.push({
+          inlineData: {
+            mimeType: getMimeType(shot.sceneReferenceImage),
+            data: stripBase64Header(shot.sceneReferenceImage)
+          }
+        });
+        parts.push({
+          text: `⚡ SCENE_REFERENCE (HIGHEST PRIORITY): This is the background/environment for this shot.
+Reproduce this EXACT location as the setting. Same architecture, furniture, atmosphere.`
+        });
+      } else if (shot.characterReferenceImage) {
+        parts.push({
+          inlineData: {
+            mimeType: getMimeType(shot.characterReferenceImage),
+            data: stripBase64Header(shot.characterReferenceImage)
+          }
+        });
+        parts.push({
+          text: `⚡ CHARACTER_REFERENCE (HIGHEST PRIORITY): This is the character/person for this shot.
+Use this EXACT person's face, hair, skin tone, body type, and clothing. Do NOT create a different person.`
+        });
+      }
+
+      // 1. USER REFERENCE PHOTOS — high priority (style/mood references)
       if (hasUserRefPhotos) {
         shot.referenceImages!.forEach((refImg, idx) => {
           const base64Data = refImg.startsWith('data:') ? refImg.split(',')[1] : refImg;

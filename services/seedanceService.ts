@@ -48,6 +48,19 @@ export interface SeedanceTaskResponse {
     message: string;
 }
 
+const getSeedanceFailureMessage = (error?: { code?: number; message?: string; raw_message?: string }): string => {
+    const code = error?.code;
+    const raw = (error?.raw_message || '').trim();
+    const msg = (error?.message || '').trim();
+    const combined = `${msg} ${raw}`.toLowerCase();
+
+    if (code === 10000 || combined.includes('quota') || combined.includes('credit') || combined.includes('insufficient')) {
+        return 'Seedance account quota issue. Please check your PiAPI/Seedance credits or plan and try again.';
+    }
+
+    return msg || raw || 'Task failed';
+};
+
 // Use Vite proxy in dev, Vercel serverless proxy in production
 const isDev = typeof window !== 'undefined' && window.location.hostname === 'localhost';
 const PIAPI_BASE_URL = isDev ? '/piapi-api' : 'https://api.piapi.ai';
@@ -301,7 +314,7 @@ export const generateSeedanceVideo = async (
             }
 
             if (status === 'failed') {
-                const errorMsg = pollResult.data.error?.message || pollResult.data.error?.raw_message || 'Task failed';
+                const errorMsg = getSeedanceFailureMessage(pollResult.data.error);
                 console.error('Seedance task failed. Full error:', JSON.stringify(pollResult.data.error, null, 2));
                 throw new Error(`Seedance generation failed: ${errorMsg}`);
             }

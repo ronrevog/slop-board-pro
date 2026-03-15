@@ -529,6 +529,102 @@ export const ShotCard: React.FC<ShotCardProps> = ({
             </div>
           </div>
 
+          {/* Compose: Scene Reference + Character Reference */}
+          <div className="mt-2 rounded border border-dashed border-neutral-700 bg-neutral-950/40 p-2 space-y-2">
+            <div className="flex items-center gap-1 mb-1">
+              <span className="text-[10px] text-amber-500 uppercase tracking-widest font-bold">⚡ Compose</span>
+              <span className="text-[10px] text-neutral-500">— place a character into a scene</span>
+            </div>
+
+            {/* Scene Reference */}
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] text-neutral-400 w-16 flex-shrink-0">Scene</span>
+              {shot.sceneReferenceImage ? (
+                <div className="relative group/scene flex-shrink-0">
+                  <img
+                    src={shot.sceneReferenceImage}
+                    alt="Scene Reference"
+                    className="w-16 h-10 object-cover rounded border border-amber-600/60 hover:border-amber-400 transition-colors"
+                    title="Scene/background reference"
+                  />
+                  <button
+                    onClick={() => onUpdate(shot.id, { sceneReferenceImage: undefined })}
+                    className="absolute -top-1 -right-1 bg-red-600 text-white rounded-full p-0.5 opacity-0 group-hover/scene:opacity-100 transition-opacity"
+                  >
+                    <X className="w-2.5 h-2.5" />
+                  </button>
+                </div>
+              ) : (
+                <label className="flex items-center gap-1 text-[10px] text-neutral-500 hover:text-amber-400 bg-neutral-800 hover:bg-neutral-700 px-2 py-1 rounded transition-colors cursor-pointer border border-neutral-700 hover:border-amber-600/50">
+                  <Upload className="w-2.5 h-2.5" /> Upload Background
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (!file) return;
+                      const reader = new FileReader();
+                      reader.onloadend = () => onUpdate(shot.id, { sceneReferenceImage: reader.result as string });
+                      reader.readAsDataURL(file);
+                      e.target.value = '';
+                    }}
+                  />
+                </label>
+              )}
+              <span className="text-[10px] text-neutral-600 italic">environment / bg</span>
+            </div>
+
+            {/* Character Reference */}
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] text-neutral-400 w-16 flex-shrink-0">Character</span>
+              {shot.characterReferenceImage ? (
+                <div className="relative group/char flex-shrink-0">
+                  <img
+                    src={shot.characterReferenceImage}
+                    alt="Character Reference"
+                    className="w-10 h-14 object-cover rounded border border-blue-600/60 hover:border-blue-400 transition-colors"
+                    title="Character reference photo"
+                  />
+                  <button
+                    onClick={() => onUpdate(shot.id, { characterReferenceImage: undefined })}
+                    className="absolute -top-1 -right-1 bg-red-600 text-white rounded-full p-0.5 opacity-0 group-hover/char:opacity-100 transition-opacity"
+                  >
+                    <X className="w-2.5 h-2.5" />
+                  </button>
+                </div>
+              ) : (
+                <label className="flex items-center gap-1 text-[10px] text-neutral-500 hover:text-blue-400 bg-neutral-800 hover:bg-neutral-700 px-2 py-1 rounded transition-colors cursor-pointer border border-neutral-700 hover:border-blue-600/50">
+                  <Upload className="w-2.5 h-2.5" /> Upload Character
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (!file) return;
+                      const reader = new FileReader();
+                      reader.onloadend = () => onUpdate(shot.id, { characterReferenceImage: reader.result as string });
+                      reader.readAsDataURL(file);
+                      e.target.value = '';
+                    }}
+                  />
+                </label>
+              )}
+              <span className="text-[10px] text-neutral-600 italic">person / actor</span>
+            </div>
+
+            {(shot.sceneReferenceImage || shot.characterReferenceImage) && (
+              <p className="text-[9px] text-amber-500/70 italic">
+                {shot.sceneReferenceImage && shot.characterReferenceImage
+                  ? '✓ Both refs set — Gemini will place the character into the scene on Generate'
+                  : shot.sceneReferenceImage
+                    ? 'Scene ref set — add a character photo to enable compose mode'
+                    : 'Character ref set — add a background photo to enable compose mode'}
+              </p>
+            )}
+          </div>
+
         </div>
 
         {/* RESTORED: Fully Interactive Dialogue Editor */}

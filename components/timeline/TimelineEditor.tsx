@@ -195,23 +195,23 @@ const SourceMonitor: React.FC<SourceMonitorProps> = ({ items, onSendToTimeline, 
         <span className="text-xs text-neutral-600">{items.length} clips</span>
       </div>
 
-      <div className="relative bg-black flex items-center justify-center flex-1 min-h-0">
+      <div className="relative flex-1 bg-black overflow-hidden">
         {selected?.videoUrl ? (
-          <video ref={videoRef} src={selected.videoUrl} className="max-w-full max-h-full object-contain"
+          <video ref={videoRef} src={selected.videoUrl} className="absolute inset-0 w-full h-full object-contain pointer-events-none"
             onTimeUpdate={() => { if (videoRef.current) setVideoTime(videoRef.current.currentTime); }}
             onEnded={() => setIsSourcePlaying(false)}
             onLoadedMetadata={() => { if (videoRef.current) setVideoDuration(videoRef.current.duration); }}
             onPlay={() => setIsSourcePlaying(true)} onPause={() => setIsSourcePlaying(false)} playsInline />
         ) : selected?.imageUrl ? (
-          <img src={selected.imageUrl} alt={selected.description} className="max-w-full max-h-full object-contain" draggable={false} />
+          <img src={selected.imageUrl} alt={selected.description} className="absolute inset-0 w-full h-full object-contain pointer-events-none" draggable={false} />
         ) : (
-          <div className="flex flex-col items-center gap-2 text-neutral-700">
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-neutral-700">
             <Monitor size={28} strokeWidth={1} />
             <span className="text-xs">Select a clip to preview</span>
           </div>
         )}
         {selected && (
-          <div className="absolute bottom-1.5 left-1/2 -translate-x-1/2 bg-black/70 px-2 py-0.5 rounded font-mono text-xs text-white tracking-widest">
+          <div className="absolute bottom-1.5 left-1/2 -translate-x-1/2 bg-black/70 px-2 py-0.5 rounded font-mono text-xs text-white tracking-widest z-10">
             {framesToTimecode(Math.round(videoTime * FPS))} / {framesToTimecode(Math.round(videoDuration * FPS))}
           </div>
         )}
@@ -933,17 +933,17 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({ project, onUpdat
   return (
     <div
       ref={containerRef}
-      className="flex flex-col bg-neutral-950 text-white select-none"
+      className="flex flex-col bg-neutral-950 text-white select-none w-full h-full overflow-hidden"
       style={{ height: 'calc(100vh - 48px)' }}
       onClick={() => setContextMenu(null)}
     >
       {/* ═══════════════════════════════════════════════════════════════════
           TOP ROW: Source Monitor | V-Divider | Program Monitor / Inspector
       ═══════════════════════════════════════════════════════════════════ */}
-      <div className="flex flex-row flex-shrink-0 overflow-hidden" style={{ height: `calc(${monitorHeight * 100}% - ${DIVIDER_SIZE / 2}px)` }}>
+      <div className="flex flex-row flex-shrink-0 w-full overflow-hidden min-h-0" style={{ height: `calc(${monitorHeight * 100}% - ${DIVIDER_SIZE / 2}px)` }}>
 
         {/* ── LEFT: Source Monitor ── */}
-        <div className="flex flex-col overflow-hidden" style={{ width: `calc(${sourceWidth * 100}% - ${DIVIDER_SIZE / 2}px)` }}>
+        <div className="flex flex-col overflow-hidden flex-shrink-0 h-full" style={{ width: `calc(${sourceWidth * 100}% - ${DIVIDER_SIZE / 2}px)` }}>
           <SourceMonitor items={sourceItems} onSendToTimeline={handleInsertFromSource} tracks={tracks} />
         </div>
 
@@ -957,7 +957,7 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({ project, onUpdat
         </div>
 
         {/* ── RIGHT: Program Monitor ── */}
-        <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+        <div className="flex-1 flex flex-col min-w-0 overflow-hidden h-full">
           {/* Header bar */}
           <div className="flex items-center bg-neutral-900 border-b border-neutral-800 flex-shrink-0">
             <div className="flex items-center gap-1.5 px-4 py-1.5 text-xs font-medium text-white border-b-2 border-red-600">
@@ -968,40 +968,35 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({ project, onUpdat
           </div>
 
           {/* Program Monitor */}
-          <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
-            <div className="flex-1 relative bg-black overflow-hidden">
-              {/* Absolute inner container — breaks video out of flex flow, prevents inflation */}
-              <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <video
-                  ref={programVideoRef}
-                  style={{
-                    maxWidth: '100%',
-                    maxHeight: '100%',
-                    objectFit: 'contain',
-                    display: currentClip?.videoUrl ? 'block' : 'none',
-                    opacity: currentClip?.videoUrl ? (currentClip.opacity ?? 1) : 0,
-                    pointerEvents: 'none',
-                  }}
-                  src={currentClip?.videoUrl || ''}
-                  muted={isMuted}
-                  playsInline
-                  preload="auto"
-                />
-                {currentClip && !currentClip.videoUrl && currentClip.imageUrl && (
-                  <img src={currentClip.imageUrl} alt={currentClip.label}
-                    style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', opacity: currentClip.opacity ?? 1 }}
-                    draggable={false} />
-                )}
-                {!currentClip && (
-                  <div className="flex flex-col items-center justify-center gap-3 text-neutral-700">
-                    <Film size={36} strokeWidth={1} />
-                    <span className="text-sm text-center px-4">
-                      {clips.length === 0 ? 'Insert clips from the Source Monitor' : 'Move playhead over a clip to preview'}
-                    </span>
-                  </div>
-                )}
-              </div>
-              {/* Overlay HUD — absolute on the outer container */}
+          <div className="flex-1 flex flex-col min-h-0 min-w-0 overflow-hidden bg-black">
+            <div className="flex-1 relative overflow-hidden">
+              <video
+                ref={programVideoRef}
+                className="absolute inset-0 w-full h-full object-contain pointer-events-none"
+                style={{
+                  display: currentClip?.videoUrl ? 'block' : 'none',
+                  opacity: currentClip?.videoUrl ? (currentClip.opacity ?? 1) : 0,
+                }}
+                src={currentClip?.videoUrl || ''}
+                muted={isMuted}
+                playsInline
+                preload="auto"
+              />
+              {currentClip && !currentClip.videoUrl && currentClip.imageUrl && (
+                <img src={currentClip.imageUrl} alt={currentClip.label}
+                  className="absolute inset-0 w-full h-full object-contain pointer-events-none"
+                  style={{ opacity: currentClip.opacity ?? 1 }}
+                  draggable={false} />
+              )}
+              {!currentClip && (
+                <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-neutral-700 pointer-events-none z-0">
+                  <Film size={36} strokeWidth={1} />
+                  <span className="text-sm text-center px-4">
+                    {clips.length === 0 ? 'Insert clips from the Source Monitor' : 'Move playhead over a clip to preview'}
+                  </span>
+                </div>
+              )}
+              {/* Overlay HUD */}
               <div className="absolute bottom-2 left-1/2 -translate-x-1/2 bg-black/70 px-3 py-1 rounded font-mono text-sm text-white tracking-widest pointer-events-none z-10">
                 {framesToTimecode(playheadFrame)}
               </div>
@@ -1081,13 +1076,13 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({ project, onUpdat
       {/* ═══════════════════════════════════════════════════════════════════
           TIMELINE: Ruler + Tracks
       ═══════════════════════════════════════════════════════════════════ */}
-      <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+      <div className="flex-1 flex flex-col min-h-0 min-w-0 overflow-hidden w-full">
         {/* Ruler */}
-        <div className="flex flex-shrink-0" style={{ height: RULER_HEIGHT }}>
+        <div className="flex flex-shrink-0 w-full min-w-0" style={{ height: RULER_HEIGHT }}>
           <div className="flex-shrink-0 bg-neutral-900 border-r border-b border-neutral-800 flex items-center px-2" style={{ width: TRACK_HEADER_WIDTH }}>
             <span className="text-xs text-neutral-600 font-mono">{framesToTimecode(playheadFrame)}</span>
           </div>
-          <div ref={rulerScrollRef} className="flex-1 overflow-x-hidden border-b border-neutral-800 bg-neutral-900 relative cursor-col-resize" style={{ height: RULER_HEIGHT }}>
+          <div ref={rulerScrollRef} className="flex-1 min-w-0 overflow-x-hidden border-b border-neutral-800 bg-neutral-900 relative cursor-col-resize" style={{ height: RULER_HEIGHT }}>
             <div ref={rulerRef} style={{ width: timelineWidth, height: RULER_HEIGHT, position: 'relative' }} onMouseDown={handleRulerMouseDown}>
               {rulerMarks.map(mark => (
                 <div key={mark.frame} className="absolute top-0 flex flex-col items-center" style={{ left: mark.frame * pxPerFrame }}>
@@ -1106,7 +1101,7 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({ project, onUpdat
         </div>
 
         {/* Tracks */}
-        <div className="flex-1 flex min-h-0 overflow-hidden">
+        <div className="flex-1 flex min-h-0 min-w-0 overflow-hidden w-full">
           {/* Headers */}
           <div className="flex-shrink-0 flex flex-col bg-neutral-900 border-r border-neutral-800 overflow-y-auto" style={{ width: TRACK_HEADER_WIDTH }}>
             {tracks.map(track => (
@@ -1126,7 +1121,7 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({ project, onUpdat
           </div>
 
           {/* Track lanes */}
-          <div ref={tracksScrollRef} className="flex-1 overflow-auto relative" style={{ cursor: isDraggingClip ? 'grabbing' : isTrimming ? 'col-resize' : 'default' }}>
+          <div ref={tracksScrollRef} className="flex-1 min-w-0 overflow-auto relative" style={{ cursor: isDraggingClip ? 'grabbing' : isTrimming ? 'col-resize' : 'default' }}>
             <div style={{ width: timelineWidth, position: 'relative' }}>
               {tracks.map(track => (
                 <div key={track.id} className="relative border-b border-neutral-800" style={{ height: track.height, opacity: track.visible ? 1 : 0.3 }}>

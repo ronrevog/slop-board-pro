@@ -156,6 +156,8 @@ export interface Shot {
   locationId: string;
   referenceShotId?: string; // ID of another shot to use as visual reference
   referenceImages?: string[]; // Base64 reference photos uploaded by user for visual consistency
+  sceneReferenceImage?: string; // Base64 — background/environment to place the character into
+  characterReferenceImage?: string; // Base64 — character photo to composite into the scene reference
   imageUrl?: string; // Base64
   imageHistory?: ImageHistoryEntry[]; // Version history of images
   videoUrl?: string; // Base64 or Blob URL
