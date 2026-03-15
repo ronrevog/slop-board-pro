@@ -4,9 +4,8 @@ import {
   Play, Pause, SkipBack, SkipForward, ZoomIn, ZoomOut,
   Scissors, Lock, Unlock, Eye, EyeOff, Trash2,
   Volume2, VolumeX, Film, Music, Layers, RefreshCw,
-  FastForward, Rewind, PlusCircle, ChevronDown, ChevronRight,
-  Monitor, Clapperboard, ListVideo, Download, GripVertical,
-  GripHorizontal, Palette, Move, AlignCenterHorizontal, Tag
+  FastForward, Rewind, ChevronDown, ChevronRight,
+  Monitor, Clapperboard, Download
 } from 'lucide-react';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -306,7 +305,6 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({ project, onUpdat
   const [isPlaying, _setIsPlaying] = useState(false);
   const [zoom, setZoom] = useState(1);
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
-  const [activePanel, setActivePanel] = useState<'program' | 'inspector'>('program');
   const [inPoint, setInPoint] = useState<number | null>(null);
   const [outPoint, setOutPoint] = useState<number | null>(null);
   const [volume, setVolume] = useState(0.8);
@@ -717,7 +715,6 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({ project, onUpdat
     };
     setClips(prev => [...prev, newClip]);
     setSelectedClipId(newClip.id);
-    setActivePanel('inspector');
   }, [clips, playheadFrame]);
 
   // ── Playhead drag ─────────────────────────────────────────────────────────
@@ -754,7 +751,6 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({ project, onUpdat
     if (e.button !== 0) return;
     e.stopPropagation();
     setSelectedClipId(clip.id);
-    setActivePanel('inspector');
     if (clip.locked) return;
     const clipLeftPx = clip.startFrame * pxPerFrame;
     const tracksEl = tracksScrollRef.current;
@@ -960,24 +956,19 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({ project, onUpdat
           <div className="w-0.5 h-8 bg-neutral-600 group-hover:bg-red-400 rounded-full transition-colors" />
         </div>
 
-        {/* ── RIGHT: Program Monitor + Inspector tabs ── */}
+        {/* ── RIGHT: Program Monitor ── */}
         <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-          {/* Tab bar */}
+          {/* Header bar */}
           <div className="flex items-center bg-neutral-900 border-b border-neutral-800 flex-shrink-0">
-            <button onClick={() => setActivePanel('program')}
-              className={`flex items-center gap-1.5 px-4 py-1.5 text-xs font-medium border-b-2 transition-colors ${activePanel === 'program' ? 'border-red-600 text-white' : 'border-transparent text-neutral-500 hover:text-neutral-300'}`}>
+            <div className="flex items-center gap-1.5 px-4 py-1.5 text-xs font-medium text-white border-b-2 border-red-600">
               <Monitor size={12} /> Program Monitor
-            </button>
-            <button onClick={() => setActivePanel('inspector')}
-              className={`flex items-center gap-1.5 px-4 py-1.5 text-xs font-medium border-b-2 transition-colors ${activePanel === 'inspector' ? 'border-red-600 text-white' : 'border-transparent text-neutral-500 hover:text-neutral-300'}`}>
-              <ListVideo size={12} /> Clip Inspector
-            </button>
+            </div>
             <div className="flex-1" />
             <span className="text-xs text-neutral-600 pr-3 font-mono">{framesToTimecode(playheadFrame)}</span>
           </div>
 
           {/* Program Monitor */}
-          <div className="flex-1 flex flex-col min-h-0" style={{ display: activePanel === 'program' ? 'flex' : 'none' }}>
+          <div className="flex-1 flex flex-col min-h-0">
             <div className="flex-1 relative bg-black flex items-center justify-center overflow-hidden">
               {/* Hidden video element — always mounted, src changes based on current clip */}
               <video
@@ -1043,118 +1034,6 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({ project, onUpdat
             </div>
           </div>
 
-          {/* ── Clip Inspector ── */}
-          <div className="flex-1 overflow-y-auto" style={{ display: activePanel === 'inspector' ? 'block' : 'none' }}>
-            {selectedClip ? (
-              <div className="p-3 space-y-3">
-                {selectedClip.imageUrl && (
-                  <div className="rounded-lg overflow-hidden border border-neutral-700 aspect-video bg-black">
-                    <img src={selectedClip.imageUrl} alt={selectedClip.label} className="w-full h-full object-cover" style={{ opacity: selectedClip.opacity }} />
-                  </div>
-                )}
-                <div>
-                  <label className="text-xs text-neutral-500 mb-1 block">Clip Name</label>
-                  <input type="text" value={selectedClip.label}
-                    onChange={e => updateClip(selectedClip.id, { label: e.target.value })}
-                    className="w-full bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-sm text-white focus:border-red-600 focus:outline-none" />
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <label className="text-xs text-neutral-500 mb-0.5 block">Start</label>
-                    <input type="text" value={framesToTimecode(selectedClip.startFrame)}
-                      onChange={e => { const f = timecodeToFrames(e.target.value); if (f !== null) updateClip(selectedClip.id, { startFrame: f }); }}
-                      className="w-full bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs text-neutral-300 font-mono focus:border-red-600 focus:outline-none" />
-                  </div>
-                  <div>
-                    <label className="text-xs text-neutral-500 mb-0.5 block">Duration</label>
-                    <p className="text-xs text-neutral-300 font-mono px-2 py-1">{framesToTimecode(selectedClip.outPoint - selectedClip.inPoint)}</p>
-                  </div>
-                  <div>
-                    <label className="text-xs text-neutral-500 mb-0.5 block">In Point</label>
-                    <input type="text" value={framesToTimecode(selectedClip.inPoint)}
-                      onChange={e => { const f = timecodeToFrames(e.target.value); if (f !== null && f < selectedClip.outPoint) updateClip(selectedClip.id, { inPoint: f }); }}
-                      className="w-full bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs text-neutral-300 font-mono focus:border-red-600 focus:outline-none" />
-                  </div>
-                  <div>
-                    <label className="text-xs text-neutral-500 mb-0.5 block">Out Point</label>
-                    <input type="text" value={framesToTimecode(selectedClip.outPoint)}
-                      onChange={e => { const f = timecodeToFrames(e.target.value); if (f !== null && f > selectedClip.inPoint) updateClip(selectedClip.id, { outPoint: f }); }}
-                      className="w-full bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs text-neutral-300 font-mono focus:border-red-600 focus:outline-none" />
-                  </div>
-                </div>
-                <div>
-                  <label className="text-xs text-neutral-500 mb-1 block">Speed: {selectedClip.speed}x</label>
-                  <div className="flex items-center gap-2">
-                    <input type="range" min={0.25} max={4} step={0.25} value={selectedClip.speed}
-                      onChange={e => updateClip(selectedClip.id, { speed: Number(e.target.value) })}
-                      className="flex-1 h-1 accent-red-600" />
-                    <button onClick={() => updateClip(selectedClip.id, { speed: 1 })} className="text-xs text-neutral-500 hover:text-white px-1">Reset</button>
-                  </div>
-                </div>
-                <div>
-                  <label className="text-xs text-neutral-500 mb-1 block">Opacity: {Math.round(selectedClip.opacity * 100)}%</label>
-                  <input type="range" min={0} max={1} step={0.05} value={selectedClip.opacity}
-                    onChange={e => updateClip(selectedClip.id, { opacity: Number(e.target.value) })}
-                    className="w-full h-1 accent-red-600" />
-                </div>
-                <div>
-                  <label className="text-xs text-neutral-500 mb-1 block">Color Label</label>
-                  <div className="flex gap-1.5">
-                    {CLIP_COLORS.map(c => (
-                      <button key={c.value} onClick={() => updateClip(selectedClip.id, { color: c.value })}
-                        className={`w-5 h-5 rounded-full border-2 transition-transform hover:scale-110 ${selectedClip.color === c.value ? 'border-white scale-110' : 'border-transparent'}`}
-                        style={{ backgroundColor: c.value }} title={c.name} />
-                    ))}
-                  </div>
-                </div>
-                <div>
-                  <label className="text-xs text-neutral-500 mb-1 block">Move to Track</label>
-                  <select value={selectedClip.trackId} onChange={e => updateClip(selectedClip.id, { trackId: e.target.value })}
-                    className="w-full bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs text-neutral-300 focus:border-red-600 focus:outline-none">
-                    {tracks.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-                  </select>
-                </div>
-                <div className="flex gap-1.5 flex-wrap">
-                  {selectedClip.imageUrl && <span className="text-xs px-2 py-0.5 rounded-full bg-blue-900/50 text-blue-300 border border-blue-800/50">Image</span>}
-                  {selectedClip.videoUrl && <span className="text-xs px-2 py-0.5 rounded-full bg-green-900/50 text-green-300 border border-green-800/50">Video</span>}
-                  {selectedClip.speed !== 1 && <span className="text-xs px-2 py-0.5 rounded-full bg-purple-900/50 text-purple-300 border border-purple-800/50">{selectedClip.speed}x</span>}
-                  {selectedClip.opacity < 1 && <span className="text-xs px-2 py-0.5 rounded-full bg-yellow-900/50 text-yellow-300 border border-yellow-800/50">{Math.round(selectedClip.opacity * 100)}%</span>}
-                </div>
-                <div className="space-y-1 pt-2 border-t border-neutral-800">
-                  <button onClick={() => { setPlayheadFrame(selectedClip.startFrame); setActivePanel('program'); }}
-                    className="w-full flex items-center gap-2 px-3 py-1.5 rounded bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-xs">
-                    <AlignCenterHorizontal size={12} /> Go to clip start
-                  </button>
-                  <button onClick={() => splitClip(selectedClip.id)}
-                    className="w-full flex items-center gap-2 px-3 py-1.5 rounded bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-xs">
-                    <Scissors size={12} /> Split at playhead
-                  </button>
-                  <button onClick={() => duplicateClip(selectedClip.id)}
-                    className="w-full flex items-center gap-2 px-3 py-1.5 rounded bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-xs">
-                    <RefreshCw size={12} /> Duplicate
-                  </button>
-                  <button onClick={() => updateClip(selectedClip.id, { locked: !selectedClip.locked })}
-                    className="w-full flex items-center gap-2 px-3 py-1.5 rounded bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-xs">
-                    {selectedClip.locked ? <Unlock size={12} /> : <Lock size={12} />} {selectedClip.locked ? 'Unlock' : 'Lock'} clip
-                  </button>
-                  <button onClick={() => rippleDeleteClip(selectedClip.id)}
-                    className="w-full flex items-center gap-2 px-3 py-1.5 rounded bg-orange-950/50 hover:bg-orange-900/50 text-orange-400 text-xs">
-                    <Trash2 size={12} /> Ripple Delete
-                  </button>
-                  <button onClick={() => deleteClip(selectedClip.id)}
-                    className="w-full flex items-center gap-2 px-3 py-1.5 rounded bg-red-950/50 hover:bg-red-900/50 text-red-400 text-xs">
-                    <Trash2 size={12} /> Delete clip
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <div className="flex flex-col items-center justify-center h-full text-neutral-700 p-6 text-center">
-                <ListVideo size={32} strokeWidth={1} className="mb-2" />
-                <p className="text-sm font-medium text-neutral-500">No clip selected</p>
-                <p className="text-xs mt-2 text-neutral-600">Click a clip on the timeline to edit its properties: name, timecodes, speed, opacity, color, and track.</p>
-              </div>
-            )}
-          </div>
         </div>
       </div>
 
