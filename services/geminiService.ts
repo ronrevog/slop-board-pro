@@ -1031,10 +1031,31 @@ CRITICAL: This must look like a DIFFERENT CAMERA ANGLE of the SAME SCENE - not a
       });
 
     } else {
-      // NO REFERENCE - normal generation with maximum reference images for consistency
-      // Strategy: Location (1) + All Characters with images (up to 5) + Adjacent shots (up to 5) = ~11-14 refs
+      // NO REFERENCE - normal generation with reference images for consistency
+      const hasUserRefPhotos = shot.referenceImages && shot.referenceImages.length > 0;
 
-      // 1. Inject Location Reference Image FIRST (sets the scene)
+      // 1. USER REFERENCE PHOTOS FIRST — highest priority, model sees these before anything else
+      if (hasUserRefPhotos) {
+        shot.referenceImages!.forEach((refImg, idx) => {
+          const base64Data = refImg.startsWith('data:') ? refImg.split(',')[1] : refImg;
+          const mimeMatch = refImg.match(/data:(image\/[^;]+);/);
+          const mimeType = mimeMatch ? mimeMatch[1] : 'image/png';
+          parts.push({
+            inlineData: {
+              mimeType: mimeType,
+              data: base64Data,
+            }
+          });
+          parts.push({
+            text: `⚠️ DIRECTOR_REFERENCE_PHOTO_${idx + 1} (HIGHEST PRIORITY): This is a reference photo provided by the director.
+THIS TAKES PRIORITY OVER ALL OTHER REFERENCE IMAGES.
+You MUST closely reproduce the visual qualities, composition, subject matter, style, mood, and lighting shown in this photo.
+Adjacent shot continuity is SECONDARY to matching this reference.`
+          });
+        });
+      }
+
+      // 2. Inject Location Reference Image
       if (activeLocation && activeLocation.imageUrl) {
         parts.push({
           inlineData: {
@@ -1070,8 +1091,8 @@ Use this appearance if this character appears in the background or is referenced
         });
       });
 
-      // 3. Inject Adjacent Scene Shots for visual continuity (up to 5)
-      const adjacentShots = getAdjacentShotsWithImages(shot, allShots, 5);
+      // 3. Inject Adjacent Scene Shots for visual continuity (fewer when ref photos present)
+      const adjacentShots = getAdjacentShotsWithImages(shot, allShots, hasUserRefPhotos ? 2 : 5);
       if (adjacentShots.length > 0) {
         adjacentShots.forEach((adjShot, idx) => {
           parts.push({
@@ -1083,24 +1104,6 @@ Use this appearance if this character appears in the background or is referenced
           parts.push({
             text: `REFERENCE_ADJACENT_SHOT_${idx + 1}: This is nearby Shot #${adjShot.number} from the same scene.
 Maintain visual continuity: same color grade, lighting, environment details, and character appearances as this shot.`
-          });
-        });
-      }
-
-      // Add user-uploaded reference photos for this shot
-      if (shot.referenceImages && shot.referenceImages.length > 0) {
-        shot.referenceImages.forEach((refImg, idx) => {
-          const base64Data = refImg.startsWith('data:') ? refImg.split(',')[1] : refImg;
-          const mimeMatch = refImg.match(/data:(image\/[^;]+);/);
-          const mimeType = mimeMatch ? mimeMatch[1] : 'image/png';
-          parts.push({
-            inlineData: {
-              mimeType: mimeType,
-              data: base64Data,
-            }
-          });
-          parts.push({
-            text: `USER_REFERENCE_PHOTO_${idx + 1}: This is a reference photo provided by the director. Use it as strong visual guidance for composition, style, mood, lighting, or subject matter. Closely match the visual qualities shown in this reference.`
           });
         });
       }
@@ -1218,6 +1221,27 @@ export const alterShotImage = async (
   });
   parts.push({ text: "REFERENCE_START_IMAGE: This is the current shot. Use this as the visual base for CHARACTERS and LOCATION. However, you MUST re-frame the shot if the Shot Type or Angle has changed below." });
 
+  // 1b. USER REFERENCE PHOTOS — highest priority after current shot
+  const hasAlterUserRefPhotos = shot.referenceImages && shot.referenceImages.length > 0;
+  if (hasAlterUserRefPhotos) {
+    shot.referenceImages!.forEach((refImg, idx) => {
+      const base64Data = refImg.startsWith('data:') ? refImg.split(',')[1] : refImg;
+      const mimeMatch = refImg.match(/data:(image\/[^;]+);/);
+      const mimeType = mimeMatch ? mimeMatch[1] : 'image/png';
+      parts.push({
+        inlineData: {
+          mimeType: mimeType,
+          data: base64Data,
+        }
+      });
+      parts.push({
+        text: `⚠️ DIRECTOR_REFERENCE_PHOTO_${idx + 1} (HIGHEST PRIORITY): This is a reference photo provided by the director.
+THIS TAKES PRIORITY OVER adjacent shots and other references.
+You MUST closely reproduce the visual qualities, composition, subject matter, style, mood, and lighting shown in this photo while transforming the start image.`
+      });
+    });
+  }
+
   // 2. Inject Reference Shot (Scene Continuity)
   if (referenceShot && referenceShot.imageUrl && referenceShot.id !== shot.id) {
     parts.push({
@@ -1257,9 +1281,9 @@ export const alterShotImage = async (
     parts.push({ text: `REFERENCE_LOCATION: "${activeLocation.name}".` });
   }
 
-  // 5. Inject Adjacent Scene Shots for continuity (up to 3)
+  // 5. Inject Adjacent Scene Shots for continuity (fewer when ref photos present)
   const alterExcludeIds = referenceShot ? [referenceShot.id] : [];
-  const alterAdjacentShots = getAdjacentShotsWithImages(shot, allShots, 3, alterExcludeIds);
+  const alterAdjacentShots = getAdjacentShotsWithImages(shot, allShots, hasAlterUserRefPhotos ? 1 : 3, alterExcludeIds);
   alterAdjacentShots.forEach((adjShot, idx) => {
     parts.push({
       inlineData: {
@@ -1271,24 +1295,6 @@ export const alterShotImage = async (
       text: `REFERENCE_ADJACENT_SHOT_${idx + 1}: Nearby Shot #${adjShot.number} — maintain visual continuity.`
     });
   });
-
-  // 6. Inject user-uploaded reference photos for this shot
-  if (shot.referenceImages && shot.referenceImages.length > 0) {
-    shot.referenceImages.forEach((refImg, idx) => {
-      const base64Data = refImg.startsWith('data:') ? refImg.split(',')[1] : refImg;
-      const mimeMatch = refImg.match(/data:(image\/[^;]+);/);
-      const mimeType = mimeMatch ? mimeMatch[1] : 'image/png';
-      parts.push({
-        inlineData: {
-          mimeType: mimeType,
-          data: base64Data,
-        }
-      });
-      parts.push({
-        text: `USER_REFERENCE_PHOTO_${idx + 1}: Director-provided reference photo. Use as strong visual guidance for composition, style, mood, lighting, or subject matter.`
-      });
-    });
-  }
 
   // Check if using Panavision C-Series Anamorphic lens
   const isAnamorphicLens = settings.lens.startsWith("Panavision C-Series");
