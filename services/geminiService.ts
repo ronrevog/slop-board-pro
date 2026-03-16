@@ -862,23 +862,27 @@ export const generateShotImage = async (
   const activeLocation = allLocations.find(l => l.id === shot.locationId);
   const referenceShot = shot.referenceShotId ? allShots.find(s => s.id === shot.referenceShotId) : null;
 
-  // Build Text Context - include ALL characters and locations for full context
-  // This ensures descriptions are always available to the model
-  let textContext = "AVAILABLE CHARACTERS IN PROJECT:\n";
-  allCharacters.forEach(c => {
-    const isInShot = shot.characters.includes(c.id);
-    textContext += `- ${c.name}${isInShot ? ' [IN THIS SHOT]' : ''}: ${c.description || 'No description'}\n`;
-  });
+  // Build Text Context - ONLY include characters and locations chosen for this shot
+  // This prevents Gemini from getting confused by irrelevant references
+  let textContext = "";
 
-  textContext += "\nAVAILABLE LOCATIONS IN PROJECT:\n";
-  allLocations.forEach(l => {
-    const isActiveLocation = l.id === shot.locationId;
-    textContext += `- ${l.name}${isActiveLocation ? ' [THIS SHOT\'S LOCATION]' : ''}: ${l.description || 'No description'}\n`;
-  });
+  if (activeCharacters.length > 0) {
+    textContext += "CHARACTERS IN THIS SHOT:\n";
+    activeCharacters.forEach(c => {
+      textContext += `- ${c.name}: ${c.description || 'No description'}`;
+      if ((c as any).wardrobe) textContext += ` | Wardrobe: ${(c as any).wardrobe}`;
+      if ((c as any).physicalFeatures) textContext += ` | Physical: ${(c as any).physicalFeatures}`;
+      if ((c as any).age) textContext += ` | Age: ${(c as any).age}`;
+      textContext += '\n';
+    });
+  }
 
-  // Highlight the specific location for this shot
   if (activeLocation) {
-    textContext += `\nSHOT LOCATION: "${activeLocation.name}" - ${activeLocation.description}\n`;
+    textContext += `\nSHOT LOCATION: "${activeLocation.name}" - ${activeLocation.description || 'No description'}`;
+    if ((activeLocation as any).timeOfDay) textContext += ` | Time: ${(activeLocation as any).timeOfDay}`;
+    if ((activeLocation as any).atmosphere) textContext += ` | Atmosphere: ${(activeLocation as any).atmosphere}`;
+    if ((activeLocation as any).weather) textContext += ` | Weather: ${(activeLocation as any).weather}`;
+    textContext += '\n';
   }
 
   // Build Dialogue Context for facial expressions/mouth shape
@@ -999,20 +1003,31 @@ CRITICAL: This must look like a DIFFERENT CAMERA ANGLE of the SAME SCENE - not a
 
       parts.push({ text: editPrompt });
 
-      // Add ALL character references for consistency (up to 5)
-      const refCharsWithImages = allCharacters.filter(c => c.imageUrl);
-      refCharsWithImages.slice(0, 5).forEach(char => {
+      // Add ONLY chosen character references (characters selected for this shot)
+      const refActiveCharsWithImages = activeCharacters.filter(c => c.imageUrl);
+      refActiveCharsWithImages.slice(0, 5).forEach(char => {
+        // Main character image
         parts.push({
           inlineData: {
             mimeType: getMimeType(char.imageUrl!),
             data: stripBase64Header(char.imageUrl!)
           }
         });
-        const isActive = shot.characters.includes(char.id);
         parts.push({
-          text: isActive
-            ? `REFERENCE_CHARACTER_IN_SHOT: "${char.name}" — MUST appear in this shot. Use this EXACT appearance.`
-            : `REFERENCE_CHARACTER_AVAILABLE: "${char.name}" — for scene consistency.`
+          text: `REFERENCE_CHARACTER_IN_SHOT: "${char.name}" — MUST appear in this shot. Use this EXACT appearance (face, hair, skin tone, clothing).`
+        });
+        // Include selected turnaround images for better consistency
+        const selectedTurnarounds = (char.turnaroundImages || []).filter(t => t.isSelected);
+        selectedTurnarounds.forEach((t, tIdx) => {
+          parts.push({
+            inlineData: {
+              mimeType: getMimeType(t.imageUrl),
+              data: stripBase64Header(t.imageUrl)
+            }
+          });
+          parts.push({
+            text: `REFERENCE_CHARACTER_TURNAROUND_${tIdx + 1}: "${char.name}" ${t.angle} — additional angle reference for consistency.`
+          });
         });
       });
 
@@ -1116,7 +1131,7 @@ Adjacent shot continuity is SECONDARY to matching this reference.`
         });
       }
 
-      // 2. Inject Location Reference Image
+      // 2. Inject Location Reference Image (only for the chosen location)
       if (activeLocation && activeLocation.imageUrl) {
         parts.push({
           inlineData: {
@@ -1130,25 +1145,48 @@ Adjacent shot continuity is SECONDARY to matching this reference.`
 Match the architecture, furniture, walls, lighting, and atmosphere from this image.
 Do NOT create a different room - use THIS room.`
         });
+        // Include selected location turnaround images for better environment consistency
+        const selectedLocTurnarounds = (activeLocation.turnaroundImages || []).filter(t => t.isSelected);
+        selectedLocTurnarounds.forEach((t, tIdx) => {
+          parts.push({
+            inlineData: {
+              mimeType: getMimeType(t.imageUrl),
+              data: stripBase64Header(t.imageUrl)
+            }
+          });
+          parts.push({
+            text: `REFERENCE_LOCATION_TURNAROUND_${tIdx + 1}: "${activeLocation.name}" ${t.angle} — additional angle of the same location for spatial consistency.`
+          });
+        });
       }
 
-      // 2. Inject ALL Character Reference Images (not just active ones - for scene awareness)
-      // Active characters get stronger labels, others are "available in scene"
-      const charsWithImages = allCharacters.filter(c => c.imageUrl);
-      charsWithImages.slice(0, 5).forEach(char => {
+      // 3. Inject ONLY chosen Character Reference Images (characters selected for this shot)
+      // Only characters toggled ON in the storyboard card get their images sent
+      const activeCharsWithImages = activeCharacters.filter(c => c.imageUrl);
+      activeCharsWithImages.slice(0, 5).forEach(char => {
+        // Main character image
         parts.push({
           inlineData: {
             mimeType: getMimeType(char.imageUrl!),
             data: stripBase64Header(char.imageUrl!)
           }
         });
-        const isActive = shot.characters.includes(char.id);
         parts.push({
-          text: isActive
-            ? `REFERENCE_CHARACTER_IN_SHOT: This is "${char.name}" — this character MUST appear in this shot.
+          text: `REFERENCE_CHARACTER_IN_SHOT: This is "${char.name}" — this character MUST appear in this shot.
 ⚠️ CRITICAL: Use this EXACT person's face, hair, skin tone, and clothing. Do NOT create a different person.`
-            : `REFERENCE_CHARACTER_AVAILABLE: This is "${char.name}" — available in the scene for context/consistency.
-Use this appearance if this character appears in the background or is referenced.`
+        });
+        // Include selected turnaround images for better character consistency
+        const selectedTurnarounds = (char.turnaroundImages || []).filter(t => t.isSelected);
+        selectedTurnarounds.forEach((t, tIdx) => {
+          parts.push({
+            inlineData: {
+              mimeType: getMimeType(t.imageUrl),
+              data: stripBase64Header(t.imageUrl)
+            }
+          });
+          parts.push({
+            text: `REFERENCE_CHARACTER_TURNAROUND_${tIdx + 1}: "${char.name}" ${t.angle} — additional angle reference for character consistency.`
+          });
         });
       });
 
@@ -1258,18 +1296,26 @@ export const alterShotImage = async (
   const activeLocation = allLocations.find(l => l.id === shot.locationId);
   const referenceShot = shot.referenceShotId ? allShots.find(s => s.id === shot.referenceShotId) : null;
 
-  // Build Text Context with ALL characters and locations
-  let textContext = "AVAILABLE CHARACTERS IN PROJECT:\n";
-  allCharacters.forEach(c => {
-    const isInShot = shot.characters.includes(c.id);
-    textContext += `- ${c.name}${isInShot ? ' [IN THIS SHOT]' : ''}: ${c.description || 'No description'}\n`;
-  });
+  // Build Text Context - ONLY include characters and locations chosen for this shot
+  let textContext = "";
 
-  textContext += "\nAVAILABLE LOCATIONS IN PROJECT:\n";
-  allLocations.forEach(l => {
-    const isActiveLocation = l.id === shot.locationId;
-    textContext += `- ${l.name}${isActiveLocation ? ' [THIS SHOT\'S LOCATION]' : ''}: ${l.description || 'No description'}\n`;
-  });
+  if (activeCharacters.length > 0) {
+    textContext += "CHARACTERS IN THIS SHOT:\n";
+    activeCharacters.forEach(c => {
+      textContext += `- ${c.name}: ${c.description || 'No description'}`;
+      if ((c as any).wardrobe) textContext += ` | Wardrobe: ${(c as any).wardrobe}`;
+      if ((c as any).physicalFeatures) textContext += ` | Physical: ${(c as any).physicalFeatures}`;
+      if ((c as any).age) textContext += ` | Age: ${(c as any).age}`;
+      textContext += '\n';
+    });
+  }
+
+  if (activeLocation) {
+    textContext += `\nSHOT LOCATION: "${activeLocation.name}" - ${activeLocation.description || 'No description'}`;
+    if ((activeLocation as any).timeOfDay) textContext += ` | Time: ${(activeLocation as any).timeOfDay}`;
+    if ((activeLocation as any).atmosphere) textContext += ` | Atmosphere: ${(activeLocation as any).atmosphere}`;
+    textContext += '\n';
+  }
 
   const parts: any[] = [];
 
@@ -1314,24 +1360,34 @@ You MUST closely reproduce the visual qualities, composition, subject matter, st
     parts.push({ text: `REFERENCE_SCENE_CONTINUITY: Also consider this shot (Shot #${referenceShot.number}) for environmental consistency.` });
   }
 
-  // 3. Inject ALL Character References (not just active — for scene awareness, up to 5)
-  const alterCharsWithImages = allCharacters.filter(c => c.imageUrl);
-  alterCharsWithImages.slice(0, 5).forEach(char => {
+  // 3. Inject ONLY chosen Character References (characters selected for this shot)
+  const alterActiveCharsWithImages = activeCharacters.filter(c => c.imageUrl);
+  alterActiveCharsWithImages.slice(0, 5).forEach(char => {
     parts.push({
       inlineData: {
         mimeType: getMimeType(char.imageUrl!),
         data: stripBase64Header(char.imageUrl!)
       }
     });
-    const isActive = shot.characters.includes(char.id);
     parts.push({
-      text: isActive
-        ? `REFERENCE_CHARACTER_IN_SHOT: "${char.name}" — MUST appear. Use this EXACT appearance.`
-        : `REFERENCE_CHARACTER_AVAILABLE: "${char.name}" — for scene consistency.`
+      text: `REFERENCE_CHARACTER_IN_SHOT: "${char.name}" — MUST appear. Use this EXACT appearance (face, hair, skin tone, clothing).`
+    });
+    // Include selected turnaround images for better consistency
+    const selectedTurnarounds = (char.turnaroundImages || []).filter(t => t.isSelected);
+    selectedTurnarounds.forEach((t, tIdx) => {
+      parts.push({
+        inlineData: {
+          mimeType: getMimeType(t.imageUrl),
+          data: stripBase64Header(t.imageUrl)
+        }
+      });
+      parts.push({
+        text: `REFERENCE_CHARACTER_TURNAROUND_${tIdx + 1}: "${char.name}" ${t.angle} — additional angle for consistency.`
+      });
     });
   });
 
-  // 4. Inject Location Reference
+  // 4. Inject Location Reference (only the chosen location)
   if (activeLocation && activeLocation.imageUrl) {
     parts.push({
       inlineData: {
@@ -1339,7 +1395,20 @@ You MUST closely reproduce the visual qualities, composition, subject matter, st
         data: stripBase64Header(activeLocation.imageUrl)
       }
     });
-    parts.push({ text: `REFERENCE_LOCATION: "${activeLocation.name}".` });
+    parts.push({ text: `REFERENCE_LOCATION: "${activeLocation.name}" — use this EXACT environment.` });
+    // Include selected location turnaround images
+    const selectedLocTurnarounds = (activeLocation.turnaroundImages || []).filter(t => t.isSelected);
+    selectedLocTurnarounds.forEach((t, tIdx) => {
+      parts.push({
+        inlineData: {
+          mimeType: getMimeType(t.imageUrl),
+          data: stripBase64Header(t.imageUrl)
+        }
+      });
+      parts.push({
+        text: `REFERENCE_LOCATION_TURNAROUND_${tIdx + 1}: "${activeLocation.name}" ${t.angle} — additional angle for spatial consistency.`
+      });
+    });
   }
 
   // 5. Inject Adjacent Scene Shots for continuity (fewer when ref photos present)
