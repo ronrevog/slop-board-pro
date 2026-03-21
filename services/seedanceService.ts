@@ -48,17 +48,23 @@ export interface SeedanceTaskResponse {
     message: string;
 }
 
-const getSeedanceFailureMessage = (error?: { code?: number; message?: string; raw_message?: string }): string => {
-    const code = error?.code;
+const getSeedanceFailureMessage = (error?: { code?: number; message?: string; raw_message?: string }, taskId?: string): string => {
     const raw = (error?.raw_message || '').trim();
     const msg = (error?.message || '').trim();
     const combined = `${msg} ${raw}`.toLowerCase();
 
-    if (code === 10000 || combined.includes('quota') || combined.includes('credit') || combined.includes('insufficient')) {
+    // Only flag quota issues when the message text actually mentions quota/credits
+    if (combined.includes('quota') || combined.includes('credit') || combined.includes('insufficient')) {
         return 'Seedance account quota issue. Please check your PiAPI/Seedance credits or plan and try again.';
     }
 
-    return msg || raw || 'Task failed';
+    // "restored frozen points" means the task failed upstream and credits were refunded
+    if (combined.includes('restored frozen points') || combined.includes('frozen')) {
+        const taskRef = taskId ? ` (Task ID: ${taskId})` : '';
+        return `Seedance task failed and credits were refunded. The upstream provider rejected the task — this may be due to content moderation, invalid input, or temporary capacity issues. Check the PiAPI dashboard for details.${taskRef}`;
+    }
+
+    return msg || raw || 'Task failed with unknown error';
 };
 
 // Use Vite proxy in dev, Vercel serverless proxy in production
@@ -314,8 +320,8 @@ export const generateSeedanceVideo = async (
             }
 
             if (status === 'failed') {
-                const errorMsg = getSeedanceFailureMessage(pollResult.data.error);
-                console.error('Seedance task failed. Full error:', JSON.stringify(pollResult.data.error, null, 2));
+                const errorMsg = getSeedanceFailureMessage(pollResult.data.error, taskId);
+                console.error(`Seedance task ${taskId} failed. Full poll response:`, JSON.stringify(pollResult.data, null, 2));
                 throw new Error(`Seedance generation failed: ${errorMsg}`);
             }
 
