@@ -1,9 +1,16 @@
 
 import React, { useRef, useState } from 'react';
 import { Project } from '../types';
-import { Plus, Film, Trash2, Calendar, Clapperboard, LayoutGrid, Download, Upload, CheckCircle, AlertCircle, ImagePlus } from 'lucide-react';
+import { Plus, Film, Trash2, Calendar, Clapperboard, LayoutGrid, Download, Upload, CheckCircle, AlertCircle, ImagePlus, HardDrive, Shield } from 'lucide-react';
 import { Button } from './Button';
 import { exportProjectsToFile, importProjectsFromFile, exportSingleProjectToFile } from '../services/storage';
+
+interface BackupStatus {
+  isActive: boolean;
+  lastBackupTime: number | null;
+  error: string | null;
+  isSupported: boolean;
+}
 
 interface ProjectDashboardProps {
   projects: Project[];
@@ -12,6 +19,8 @@ interface ProjectDashboardProps {
   onDelete: (id: string, e: React.MouseEvent) => void;
   onRefresh: () => void;
   onUpdateProject: (project: Project) => void;
+  backupStatus?: BackupStatus;
+  onSetBackupFile?: () => void;
 }
 
 export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
@@ -20,7 +29,9 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
   onSelect,
   onDelete,
   onRefresh,
-  onUpdateProject
+  onUpdateProject,
+  backupStatus,
+  onSetBackupFile
 }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const coverInputRef = useRef<HTMLInputElement>(null);
@@ -141,11 +152,35 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
             <h1 className="text-4xl md:text-5xl font-serif font-bold text-white tracking-tight flex items-center gap-3">
               <Film className="w-10 h-10 text-red-600" />
               Slop Board
-              <span className="text-xs font-normal text-neutral-600 ml-2">v1.3.4</span>
+              <span className="text-xs font-normal text-neutral-600 ml-2">v1.3.5</span>
             </h1>
             <p className="text-neutral-500 uppercase tracking-widest text-sm font-medium">Cinematic Project Manager</p>
           </div>
           <div className="flex items-center gap-3">
+            {/* Auto-Backup to Disk Button */}
+            {backupStatus?.isSupported && onSetBackupFile && (
+              <button
+                onClick={onSetBackupFile}
+                className={`flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg transition-colors ${backupStatus.isActive
+                  ? 'text-green-400 bg-green-900/20 border border-green-800 hover:bg-green-900/30'
+                  : 'text-yellow-400 bg-yellow-900/20 border border-yellow-800/50 hover:bg-yellow-900/30'
+                  }`}
+                title={backupStatus.isActive
+                  ? `Auto-backup active${backupStatus.lastBackupTime ? ` — Last: ${new Date(backupStatus.lastBackupTime).toLocaleTimeString()}` : ''}`
+                  : 'Set a backup file on disk for auto-save (recommended!)'
+                }
+              >
+                <HardDrive className="w-4 h-4" />
+                {backupStatus.isActive ? (
+                  <>
+                    <Shield className="w-3 h-3" />
+                    <span className="hidden lg:inline">Auto-Backup Active</span>
+                  </>
+                ) : (
+                  <span>Set Backup File</span>
+                )}
+              </button>
+            )}
             <button
               onClick={handleImportClick}
               className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-neutral-400 hover:text-white bg-neutral-800 hover:bg-neutral-700 rounded-lg transition-colors"
@@ -281,7 +316,7 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
 
       {/* Footer */}
       <div className="max-w-7xl mx-auto mt-12 pt-6 border-t border-neutral-800/50 text-center text-neutral-600 text-sm">
-        Version 1.3.4
+        Version 1.3.5
       </div>
     </div>
   );

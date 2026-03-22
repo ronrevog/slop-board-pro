@@ -15,13 +15,22 @@ import { Clapperboard, Settings, Users, MapPin, Film, ChevronRight, LayoutGrid, 
 import { AIAgent } from './agent/AIAgent';
 import { TimelineEditor } from './timeline/TimelineEditor';
 
+interface BackupStatus {
+  isActive: boolean;
+  lastBackupTime: number | null;
+  error: string | null;
+  isSupported: boolean;
+}
+
 interface ProjectEditorProps {
   initialProject: Project;
   onSave: (project: Project) => void;
   onBack: () => void;
+  backupStatus?: BackupStatus;
+  onSetBackupFile?: () => void;
 }
 
-export const ProjectEditor: React.FC<ProjectEditorProps> = ({ initialProject, onSave, onBack }) => {
+export const ProjectEditor: React.FC<ProjectEditorProps> = ({ initialProject, onSave, onBack, backupStatus, onSetBackupFile }) => {
   // Initialize internal state with the passed project
   const [project, setProject] = useState<Project>(() => {
     // Ensure scenes array exists for backward compatibility
@@ -1731,6 +1740,44 @@ Style: ${project.settings.cinematographer}, shot on ${project.settings.filmStock
             placeholder="Project Title"
           />
           <p className="text-xs text-neutral-500 mt-1 uppercase tracking-widest">Cinematic Settings</p>
+
+          {/* Backup Status Badge */}
+          {backupStatus && (
+            <button
+              onClick={onSetBackupFile}
+              className={`mt-3 w-full flex items-center gap-2 px-3 py-2 rounded-md text-xs transition-colors ${backupStatus.isActive
+                ? 'bg-green-900/20 border border-green-900/30 text-green-400 hover:bg-green-900/30'
+                : backupStatus.isSupported
+                  ? 'bg-yellow-900/20 border border-yellow-800/30 text-yellow-500 hover:bg-yellow-900/30'
+                  : 'bg-neutral-800 border border-neutral-700 text-neutral-500'
+                }`}
+              title={backupStatus.isActive
+                ? `Auto-backup active${backupStatus.lastBackupTime ? ` — Last: ${new Date(backupStatus.lastBackupTime).toLocaleTimeString()}` : ''}`
+                : 'Click to set a backup file on disk'
+              }
+            >
+              {backupStatus.isActive ? (
+                <>
+                  <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
+                  <span>Backup Active</span>
+                  {backupStatus.lastBackupTime && (
+                    <span className="ml-auto text-green-600">{new Date(backupStatus.lastBackupTime).toLocaleTimeString()}</span>
+                  )}
+                </>
+              ) : backupStatus.isSupported ? (
+                <>
+                  <span className="w-2 h-2 bg-yellow-500 rounded-full" />
+                  <span>Set Backup File</span>
+                  <span className="ml-auto text-yellow-700">⚠</span>
+                </>
+              ) : (
+                <>
+                  <span className="w-2 h-2 bg-neutral-600 rounded-full" />
+                  <span>Auto-save to localStorage</span>
+                </>
+              )}
+            </button>
+          )}
         </div>
 
         {/* Scene Selector - Collapsible */}

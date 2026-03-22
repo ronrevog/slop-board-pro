@@ -3,6 +3,252 @@ const DB_NAME = 'SlopBoardDB';
 const STORE_NAME = 'projects';
 const DB_VERSION = 1;
 
+// ========== FILE SYSTEM ACCESS API AUTO-BACKUP ==========
+
+// In-memory file handle for the current session
+let _fileBackupHandle: FileSystemFileHandle | null = null;
+let _lastFileBackupTime: number | null = null;
+let _fileBackupError: string | null = null;
+
+// Check if File System Access API is supported
+export const isFileSystemAccessSupported = (): boolean => {
+  return 'showSaveFilePicker' in window;
+};
+
+// Let user pick a backup file location (call once per session)
+export const initFileBackupHandle = async (): Promise<boolean> => {
+  if (!isFileSystemAccessSupported()) return false;
+
+  try {
+    const handle = await (window as any).showSaveFilePicker({
+      suggestedName: `slop-board-autobackup.json`,
+      types: [
+        {
+          description: 'JSON Backup',
+          accept: { 'application/json': ['.json'] },
+        },
+      ],
+    });
+    _fileBackupHandle = handle;
+    _fileBackupError = null;
+    // Do an immediate backup
+    const projects = await getAllProjectsFromDB();
+    await writeFileBackup(projects);
+    return true;
+  } catch (e: any) {
+    // User cancelled the picker
+    if (e.name === 'AbortError') return false;
+    _fileBackupError = e.message || 'Failed to set backup file';
+    console.error('File backup init failed:', e);
+    return false;
+  }
+};
+
+// Write all projects to the backup file silently
+export const writeFileBackup = async (projects: any[]): Promise<boolean> => {
+  if (!_fileBackupHandle) return false;
+
+  try {
+    const exportData = {
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      appName: 'Slop-Board',
+      autoBackup: true,
+      projects: projects,
+    };
+
+    const writable = await (_fileBackupHandle as any).createWritable();
+    await writable.write(JSON.stringify(exportData, null, 2));
+    await writable.close();
+
+    _lastFileBackupTime = Date.now();
+    _fileBackupError = null;
+    return true;
+  } catch (e: any) {
+    console.error('File backup write failed:', e);
+    _fileBackupError = e.message || 'Write failed';
+    // If permission was revoked, clear the handle
+    if (e.name === 'NotAllowedError' || e.name === 'SecurityError') {
+      _fileBackupHandle = null;
+    }
+    return false;
+  }
+};
+
+// Get backup status info for UI
+export const getFileBackupStatus = (): {
+  isActive: boolean;
+  lastBackupTime: number | null;
+  error: string | null;
+  isSupported: boolean;
+} => ({
+  isActive: _fileBackupHandle !== null,
+  lastBackupTime: _lastFileBackupTime,
+  error: _fileBackupError,
+  isSupported: isFileSystemAccessSupported(),
+});
+
+// ========== LOCALSTORAGE EMERGENCY SNAPSHOT ==========
+
+const SNAPSHOT_KEY = 'slop_board_emergency_snapshot';
+const SNAPSHOT_META_KEY = 'slop_board_snapshot_meta';
+
+// Strip base64 images from a project to keep size under localStorage limits (~5MB)
+const stripImagesFromProject = (project: any): any => {
+  const stripped = { ...project };
+
+  // Strip character images
+  if (stripped.characters) {
+    stripped.characters = stripped.characters.map((c: any) => ({
+      ...c,
+      imageUrl: c.imageUrl?.startsWith('data:') ? '[base64-stripped]' : c.imageUrl,
+      originalImageUrl: undefined,
+      turnaroundImages: c.turnaroundImages?.map((t: any) => ({
+        ...t,
+        imageUrl: t.imageUrl?.startsWith('data:') ? '[base64-stripped]' : t.imageUrl,
+      })),
+    }));
+  }
+
+  // Strip location images
+  if (stripped.locations) {
+    stripped.locations = stripped.locations.map((l: any) => ({
+      ...l,
+      imageUrl: l.imageUrl?.startsWith('data:') ? '[base64-stripped]' : l.imageUrl,
+      originalImageUrl: undefined,
+      turnaroundImages: l.turnaroundImages?.map((t: any) => ({
+        ...t,
+        imageUrl: t.imageUrl?.startsWith('data:') ? '[base64-stripped]' : t.imageUrl,
+      })),
+    }));
+  }
+
+  // Strip shot images and video data
+  const stripShots = (shots: any[]) =>
+    shots?.map((s: any) => ({
+      ...s,
+      imageUrl: s.imageUrl?.startsWith('data:') ? '[base64-stripped]' : s.imageUrl,
+      videoUrl: undefined,
+      videoSegments: s.videoSegments?.map((seg: any) => ({
+        ...seg,
+        url: seg.url?.startsWith('data:') || seg.url?.startsWith('blob:') ? '[stripped]' : seg.url,
+      })),
+      imageHistory: undefined, // Drop image history to save space
+      referenceImages: undefined,
+      sceneReferenceImage: undefined,
+      characterReferenceImage: undefined,
+      chatHistory: s.chatHistory?.map((msg: any) => ({
+        ...msg,
+        imageUrl: undefined,
+      })),
+    })) || [];
+
+  // Strip scenes
+  if (stripped.scenes) {
+    stripped.scenes = stripped.scenes.map((scene: any) => ({
+      ...scene,
+      shots: stripShots(scene.shots),
+    }));
+  }
+
+  // Strip legacy shots
+  if (stripped.shots) {
+    stripped.shots = stripShots(stripped.shots);
+  }
+
+  // Strip cover image
+  if (stripped.coverImageUrl?.startsWith('data:')) {
+    stripped.coverImageUrl = '[base64-stripped]';
+  }
+
+  return stripped;
+};
+
+// Save emergency snapshot to localStorage
+export const saveEmergencySnapshot = (projects: any[]): boolean => {
+  try {
+    const stripped = projects.map(stripImagesFromProject);
+    const data = JSON.stringify({
+      version: 1,
+      appName: 'Slop-Board',
+      emergencySnapshot: true,
+      projects: stripped,
+    });
+
+    // Check if it'll fit (localStorage is ~5MB)
+    if (data.length > 4 * 1024 * 1024) {
+      console.warn('Emergency snapshot too large for localStorage, saving partial...');
+      // Try saving just the first 3 projects
+      const partial = JSON.stringify({
+        version: 1,
+        appName: 'Slop-Board',
+        emergencySnapshot: true,
+        partial: true,
+        projects: stripped.slice(0, 3),
+      });
+      localStorage.setItem(SNAPSHOT_KEY, partial);
+    } else {
+      localStorage.setItem(SNAPSHOT_KEY, data);
+    }
+
+    localStorage.setItem(SNAPSHOT_META_KEY, JSON.stringify({
+      savedAt: new Date().toISOString(),
+      projectCount: projects.length,
+      projectTitles: projects.map(p => p.title),
+    }));
+
+    return true;
+  } catch (e) {
+    console.error('Emergency snapshot save failed:', e);
+    return false;
+  }
+};
+
+// Get emergency snapshot from localStorage
+export const getEmergencySnapshot = (): { projects: any[]; meta: any } | null => {
+  try {
+    const data = localStorage.getItem(SNAPSHOT_KEY);
+    const meta = localStorage.getItem(SNAPSHOT_META_KEY);
+    if (!data) return null;
+
+    const parsed = JSON.parse(data);
+    if (!parsed.projects || parsed.projects.length === 0) return null;
+
+    return {
+      projects: parsed.projects,
+      meta: meta ? JSON.parse(meta) : null,
+    };
+  } catch (e) {
+    console.error('Failed to read emergency snapshot:', e);
+    return null;
+  }
+};
+
+// Clear emergency snapshot (after successful recovery)
+export const clearEmergencySnapshot = () => {
+  localStorage.removeItem(SNAPSHOT_KEY);
+  localStorage.removeItem(SNAPSHOT_META_KEY);
+};
+
+// ========== UNIFIED BACKUP TRIGGER ==========
+
+// Debounce timer for file backup (don't write to disk on every keystroke)
+let _fileBackupTimer: ReturnType<typeof setTimeout> | null = null;
+
+// Call this after every IndexedDB save to trigger both backup mechanisms
+export const triggerAutoBackup = (projects: any[]) => {
+  // localStorage snapshot — immediate (it's fast)
+  saveEmergencySnapshot(projects);
+
+  // File backup — debounced to every 5 seconds
+  if (_fileBackupHandle) {
+    if (_fileBackupTimer) clearTimeout(_fileBackupTimer);
+    _fileBackupTimer = setTimeout(() => {
+      writeFileBackup(projects);
+    }, 5000);
+  }
+};
+
 export const initDB = (): Promise<IDBDatabase> => {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
