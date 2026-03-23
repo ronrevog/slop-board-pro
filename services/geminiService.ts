@@ -757,21 +757,30 @@ export const breakdownScript = async (
  * Selects adjacent shots from the same scene for visual continuity.
  * Prioritizes nearest neighbors (alternating before/after) and only includes shots with images.
  * Skips the current shot and any explicitly set reference shot.
+ * 
+ * CHARACTER OVERLAP FILTER: Only includes adjacent shots that share at least one
+ * selected character with the current shot. This prevents character contamination
+ * (e.g., NBA appearing in a Cort-only shot because the adjacent shot had NBA).
+ * If no adjacent shots share characters, allows up to 1 shot for environment-only reference.
  */
 const getAdjacentShotsWithImages = (
   currentShot: Shot,
   allShots: Shot[],
   maxCount: number = 5,
   excludeIds: string[] = []
-): Shot[] => {
+): { shot: Shot; environmentOnly: boolean }[] => {
   const currentIndex = allShots.findIndex(s => s.id === currentShot.id);
   if (currentIndex === -1) return [];
 
   const excludeSet = new Set([currentShot.id, ...excludeIds]);
-  const result: Shot[] = [];
+  const currentCharacterIds = new Set(currentShot.characters || []);
+  const hasCharacters = currentCharacterIds.size > 0;
+
+  const characterMatchShots: { shot: Shot; environmentOnly: boolean }[] = [];
+  const environmentOnlyShots: { shot: Shot; environmentOnly: boolean }[] = [];
 
   // Alternate: 1 before, 1 after, 2 before, 2 after, etc.
-  for (let offset = 1; result.length < maxCount; offset++) {
+  for (let offset = 1; characterMatchShots.length < maxCount; offset++) {
     const beforeIdx = currentIndex - offset;
     const afterIdx = currentIndex + offset;
     const hasBefore = beforeIdx >= 0;
@@ -779,24 +788,37 @@ const getAdjacentShotsWithImages = (
 
     if (!hasBefore && !hasAfter) break;
 
-    if (hasBefore) {
-      const shot = allShots[beforeIdx];
-      if (shot.imageUrl && !excludeSet.has(shot.id)) {
-        result.push(shot);
-        if (result.length >= maxCount) break;
-      }
-    }
+    for (const idx of [beforeIdx, afterIdx]) {
+      if (idx < 0 || idx >= allShots.length) continue;
+      const shot = allShots[idx];
+      if (!shot.imageUrl || excludeSet.has(shot.id)) continue;
 
-    if (hasAfter) {
-      const shot = allShots[afterIdx];
-      if (shot.imageUrl && !excludeSet.has(shot.id)) {
-        result.push(shot);
-        if (result.length >= maxCount) break;
+      if (!hasCharacters) {
+        // If current shot has no characters selected, allow adjacent for environment only
+        if (environmentOnlyShots.length < 1) {
+          environmentOnlyShots.push({ shot, environmentOnly: true });
+        }
+      } else {
+        // Check character overlap
+        const adjCharacters = shot.characters || [];
+        const hasOverlap = adjCharacters.some(cId => currentCharacterIds.has(cId));
+
+        if (hasOverlap) {
+          characterMatchShots.push({ shot, environmentOnly: false });
+          if (characterMatchShots.length >= maxCount) break;
+        } else if (environmentOnlyShots.length < 1) {
+          // Keep at most 1 environment-only shot (for color grade / location continuity)
+          environmentOnlyShots.push({ shot, environmentOnly: true });
+        }
       }
     }
   }
 
-  return result;
+  // Return character-matched shots first, then environment-only fallback if no matches
+  if (characterMatchShots.length > 0) {
+    return characterMatchShots;
+  }
+  return environmentOnlyShots;
 };
 
 /**
@@ -964,6 +986,8 @@ export const generateShotImage = async (
     
     5. If dialogue is present, characters should have appropriate facial expressions.
     ${isAnamorphicLens ? '6. Apply classic anamorphic lens characteristics: oval bokeh, blue horizontal flares, and cinematic depth.' : ''}
+    
+    ⚠️ CHARACTER EXCLUSION RULE: ONLY the characters listed above under "CHARACTERS IN THIS SHOT" should appear as people in the generated image. Do NOT add any other people, faces, or figures from reference images. If an adjacent reference shot shows different characters, IGNORE those people entirely — use the reference ONLY for color grade and environment.
   `;
 
   const targetRatio = mapAspectRatio(settings.aspectRatio);
@@ -1031,9 +1055,9 @@ CRITICAL: This must look like a DIFFERENT CAMERA ANGLE of the SAME SCENE - not a
         });
       });
 
-      // Add adjacent shots for continuity (up to 3 in edit mode)
+      // Add adjacent shots for continuity (up to 3 in edit mode, filtered by character overlap)
       const refAdjacentShots = getAdjacentShotsWithImages(shot, allShots, 3, [referenceShot.id]);
-      refAdjacentShots.forEach((adjShot, idx) => {
+      refAdjacentShots.forEach(({ shot: adjShot, environmentOnly }, idx) => {
         parts.push({
           inlineData: {
             mimeType: getMimeType(adjShot.imageUrl!),
@@ -1041,7 +1065,9 @@ CRITICAL: This must look like a DIFFERENT CAMERA ANGLE of the SAME SCENE - not a
           }
         });
         parts.push({
-          text: `REFERENCE_ADJACENT_SHOT_${idx + 1}: Nearby Shot #${adjShot.number} — maintain visual continuity with this shot.`
+          text: environmentOnly
+            ? `REFERENCE_ENVIRONMENT_${idx + 1}: Nearby Shot #${adjShot.number} — use ONLY for color grade, lighting, and environment continuity. IGNORE all people/characters in this image.`
+            : `REFERENCE_ADJACENT_SHOT_${idx + 1}: Nearby Shot #${adjShot.number} — maintain visual continuity with this shot.`
         });
       });
 
@@ -1190,10 +1216,10 @@ Do NOT create a different room - use THIS room.`
         });
       });
 
-      // 3. Inject Adjacent Scene Shots for visual continuity (fewer when ref photos present)
+      // 3. Inject Adjacent Scene Shots for visual continuity (filtered by character overlap)
       const adjacentShots = getAdjacentShotsWithImages(shot, allShots, hasUserRefPhotos ? 2 : 5);
       if (adjacentShots.length > 0) {
-        adjacentShots.forEach((adjShot, idx) => {
+        adjacentShots.forEach(({ shot: adjShot, environmentOnly }, idx) => {
           parts.push({
             inlineData: {
               mimeType: getMimeType(adjShot.imageUrl!),
@@ -1201,7 +1227,9 @@ Do NOT create a different room - use THIS room.`
             }
           });
           parts.push({
-            text: `REFERENCE_ADJACENT_SHOT_${idx + 1}: This is nearby Shot #${adjShot.number} from the same scene.
+            text: environmentOnly
+              ? `REFERENCE_ENVIRONMENT_${idx + 1}: Nearby Shot #${adjShot.number} — use ONLY for color grade, lighting, and environment continuity. IGNORE all people/characters in this image — they are NOT in this shot.`
+              : `REFERENCE_ADJACENT_SHOT_${idx + 1}: This is nearby Shot #${adjShot.number} from the same scene.
 Maintain visual continuity: same color grade, lighting, environment details, and character appearances as this shot.`
           });
         });
@@ -1411,10 +1439,10 @@ You MUST closely reproduce the visual qualities, composition, subject matter, st
     });
   }
 
-  // 5. Inject Adjacent Scene Shots for continuity (fewer when ref photos present)
+  // 5. Inject Adjacent Scene Shots for continuity (filtered by character overlap)
   const alterExcludeIds = referenceShot ? [referenceShot.id] : [];
   const alterAdjacentShots = getAdjacentShotsWithImages(shot, allShots, hasAlterUserRefPhotos ? 1 : 3, alterExcludeIds);
-  alterAdjacentShots.forEach((adjShot, idx) => {
+  alterAdjacentShots.forEach(({ shot: adjShot, environmentOnly }, idx) => {
     parts.push({
       inlineData: {
         mimeType: getMimeType(adjShot.imageUrl!),
@@ -1422,7 +1450,9 @@ You MUST closely reproduce the visual qualities, composition, subject matter, st
       }
     });
     parts.push({
-      text: `REFERENCE_ADJACENT_SHOT_${idx + 1}: Nearby Shot #${adjShot.number} — maintain visual continuity.`
+      text: environmentOnly
+        ? `REFERENCE_ENVIRONMENT_${idx + 1}: Nearby Shot #${adjShot.number} — use ONLY for color grade, lighting, and environment continuity. IGNORE all people/characters in this image.`
+        : `REFERENCE_ADJACENT_SHOT_${idx + 1}: Nearby Shot #${adjShot.number} — maintain visual continuity.`
     });
   });
 
@@ -1473,6 +1503,8 @@ You MUST closely reproduce the visual qualities, composition, subject matter, st
        - If the user selected "Close Up" from a "Wide", crop and re-render the details.
     2. **Consistency**: Maintain the identity of the characters and the details of the location.
     ${isAnamorphicLens ? '3. **Anamorphic**: Apply classic anamorphic lens characteristics: oval bokeh, blue horizontal flares, and cinematic depth.' : ''}
+    
+    ⚠️ CHARACTER EXCLUSION RULE: ONLY the characters from the REFERENCE_START_IMAGE and REFERENCE_CHARACTER_IN_SHOT labels should appear as people. Do NOT add any other people, faces, or figures from adjacent reference shots. If an environment reference shows different characters, IGNORE those people entirely.
     </instructions>
   `;
 
