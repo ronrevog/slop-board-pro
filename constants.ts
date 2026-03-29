@@ -137,6 +137,28 @@ export const RESOLUTIONS = [
   { value: '4k', label: '4K — Ultra HD', description: '3840×2160' },
 ];
 
+export const COMPOSITION_TECHNIQUES = [
+  { value: 'None', label: 'None', description: 'No specific composition technique applied' },
+  { value: 'Rule of Thirds', label: 'Rule of Thirds', description: '3×3 grid — subject on intersections/lines for tension & energy' },
+  { value: 'Golden Ratio', label: 'Golden Ratio (Fibonacci)', description: '≈1.618 spiral leading the eye naturally to the focal point' },
+  { value: 'Symmetry', label: 'Symmetry', description: 'Mirror balance — stability, formality, and peace' },
+  { value: 'Negative Space', label: 'Negative Space', description: 'Empty area around subject — solitude, scale, minimalism' },
+  { value: 'Juxtaposition', label: 'Juxtaposition', description: 'Contrasting elements side by side — old vs new, nature vs industry' },
+  { value: 'Diagonal Lines', label: 'Diagonal Lines', description: 'Slanted lines creating movement, action, and depth' },
+  { value: 'Golden Triangle', label: 'Golden Triangle', description: 'Diagonal + right-angle lines forming triangles — dynamic tension' },
+];
+
+// Composition technique prompt modifiers for image generation
+export const COMPOSITION_PROMPTS: Record<string, string> = {
+  'Rule of Thirds': 'Compose using the Rule of Thirds: divide the frame into a 3×3 grid and place the main subject precisely at one of the intersection points or along a grid line. Balanced negative space on the opposite side. Off-center framing creates visual tension and energy.',
+  'Golden Ratio': 'Compose following the Golden Ratio (Fibonacci Spiral, ≈1.618). The composition should lead the eye in a natural, organic spiral toward the focal point. Mathematical precision with organic flow — the arrangement should feel divinely proportioned, not rigid.',
+  'Symmetry': 'Compose with perfect bilateral symmetry. Both sides of the frame should be identical or near-identical, split along the central vertical or horizontal axis. Convey stability, formality, and visual harmony. Geometric precision, centered framing.',
+  'Negative Space': 'Compose with heavy emphasis on negative space. The area around the main subject is intentionally left empty or minimally detailed. The subject should occupy a small portion of the frame (roughly 5-15%), forcing the viewer\'s eye directly onto it. Minimalist aesthetic, high contrast between subject and void.',
+  'Juxtaposition': 'Compose using juxtaposition: place two visually contrasting elements close together in the frame to highlight their differences and create narrative meaning. The contrast can be textural, temporal, natural vs artificial, or thematic. Dramatic storytelling through visual contrast.',
+  'Diagonal Lines': 'Compose using strong diagonal lines that cut through the frame to create a dynamic sense of movement, action, and depth. The diagonal elements should lead the eye from one corner toward the opposite, creating visual energy and forward momentum. Deep perspective, architectural power.',
+  'Golden Triangle': 'Compose using the Golden Triangle: a diagonal line runs from one corner to the opposite, with perpendicular lines meeting it from the remaining corners at 90-degree angles. The subject should align with these diagonals and triangular zones. Dynamic tension, athletic grace, strong directional movement.',
+};
+
 export const LIGHTING_STYLES = [
   "Chiaroscuro (High Contrast)",
   "Rembrandt (Triangle highlight)",

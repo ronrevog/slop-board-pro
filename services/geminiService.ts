@@ -1,7 +1,7 @@
 
 import { GoogleGenAI } from "@google/genai";
 import { CinematicSettings, Character, Location, Shot, ChatMessage } from "../types";
-import { ANAMORPHIC_LENS_PROMPTS } from "../constants";
+import { ANAMORPHIC_LENS_PROMPTS, COMPOSITION_PROMPTS } from "../constants";
 
 // Helper to sanitize JSON strings
 const cleanJson = (text: string) => {
@@ -939,6 +939,20 @@ export const generateShotImage = async (
     `;
   }
 
+  // Build composition technique instructions if applicable
+  const compositionTechnique = shot.composition && shot.composition !== 'None' ? shot.composition : null;
+  const compositionPrompt = compositionTechnique ? COMPOSITION_PROMPTS[compositionTechnique] : null;
+  let compositionInstructions = "";
+  if (compositionPrompt) {
+    compositionInstructions = `
+    <COMPOSITION_TECHNIQUE>
+    ⚠️ MANDATORY COMPOSITION: ${compositionTechnique}
+    ${compositionPrompt}
+    You MUST arrange the visual elements in the frame according to this composition technique. This is a primary creative directive.
+    </COMPOSITION_TECHNIQUE>
+    `;
+  }
+
   // Main Cinematic Prompt - Character/Location descriptions are CRITICAL and must be followed
   const mainPromptText = `
     TASK: Generate a high-fidelity cinematic movie keyframe.
@@ -964,6 +978,7 @@ export const generateShotImage = async (
     - Shot Type: ${shot.shotType}
     - Camera Move: ${shot.cameraMove}
     - Aspect Ratio: ${settings.aspectRatio}
+    ${compositionInstructions}
     ${anamorphicInstructions}
 
     =============================================
@@ -1490,6 +1505,16 @@ You MUST closely reproduce the visual qualities, composition, subject matter, st
     - Lighting: ${settings.lighting}
     - Aspect Ratio: ${settings.aspectRatio}
     </TARGET_TECHNICAL_SPECS>
+    ${(() => {
+      const ct = shot.composition && shot.composition !== 'None' ? shot.composition : null;
+      const cp = ct ? COMPOSITION_PROMPTS[ct] : null;
+      return cp ? `
+    <COMPOSITION_TECHNIQUE>
+    ⚠️ MANDATORY COMPOSITION: ${ct}
+    ${cp}
+    You MUST rearrange the visual elements to follow this composition technique.
+    </COMPOSITION_TECHNIQUE>` : '';
+    })()}
     ${anamorphicInstructions}
     <scene_description>
     Action: ${shot.action}

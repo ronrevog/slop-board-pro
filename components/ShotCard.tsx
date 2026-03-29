@@ -3,8 +3,8 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Shot, Character, Location, ImageHistoryEntry, ChatMessage } from '../types';
 import { Camera, RefreshCw, SendHorizontal, MessageSquare, MapPin, Users, Edit3, Trash2, Upload, Download, Maximize2, Wand2, Plus, X, Link, Copy, Focus, History, RotateCcw, MonitorPlay, ArrowUpFromLine, MessageCircle, ImageIcon } from 'lucide-react';
 import { Button } from './Button';
-import { ASPECT_RATIOS } from '../constants';
-import { AspectRatio } from '../types';
+import { ASPECT_RATIOS, COMPOSITION_TECHNIQUES } from '../constants';
+import { AspectRatio, CompositionTechnique } from '../types';
 
 // Convert aspect ratio string to numeric value for CSS
 const getAspectRatioValue = (ratio: string): string => {
@@ -378,6 +378,16 @@ export const ShotCard: React.FC<ShotCardProps> = ({
               onChange={(e) => onUpdate(shot.id, { cameraMove: e.target.value as any })}
             >
               {['Static', 'Dolly In', 'Dolly Out', 'Pan', 'Tilt', 'Handheld', 'Tracking', 'Crane', 'Arc', 'Zoom In', 'Zoom Out', 'Whip Pan'].map(t => <option key={t}>{t}</option>)}
+            </select>
+            <select
+              className="bg-transparent text-xs text-neutral-500 uppercase font-medium tracking-wide outline-none text-right hover:text-neutral-300 transition-colors max-w-[100px]"
+              value={shot.composition || 'None'}
+              onChange={(e) => onUpdate(shot.id, { composition: e.target.value as CompositionTechnique })}
+              title="Composition technique — guides visual arrangement"
+            >
+              {COMPOSITION_TECHNIQUES.map(ct => (
+                <option key={ct.value} value={ct.value} title={ct.description}>{ct.label}</option>
+              ))}
             </select>
             <button
               onClick={() => onDuplicate(shot.id)}

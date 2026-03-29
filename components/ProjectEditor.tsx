@@ -350,6 +350,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ initialProject, on
           dialogueLines: lines,
           shotType: (s.shotType as any) || 'Medium',
           cameraMove: (s.cameraMove as any) || 'Static',
+          composition: 'None' as const,
           characters: linkedCharacters, // AUTO-LINKED!
           locationId: locationId, // AUTO-LINKED!
           isGenerating: false,
@@ -479,6 +480,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ initialProject, on
             dialogueLines: lines,
             shotType: (s.shotType as any) || 'Medium',
             cameraMove: (s.cameraMove as any) || 'Static',
+            composition: 'None' as const,
             characters: [],
             locationId: locationId,
             isGenerating: false,
@@ -538,6 +540,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ initialProject, on
       dialogueLines: [],
       shotType: 'Medium',
       cameraMove: 'Static',
+      composition: 'None',
       characters: [],
       locationId: project.locations[0]?.id || '',
       isGenerating: false,
@@ -1020,6 +1023,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ initialProject, on
           dialogueLines,
           shotType: (spec.shotType as any) || 'Medium',
           cameraMove: (spec.cameraMove as any) || 'Static',
+          composition: 'None' as const,
           characters: linkedCharacters,
           locationId: activeLocationId || '',
           isGenerating: false,
@@ -1104,6 +1108,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ initialProject, on
           dialogueLines,
           shotType: (spec.shotType as any) || 'Medium',
           cameraMove: (spec.cameraMove as any) || 'Static',
+          composition: 'None',
           characters: linkedCharacters,
           locationId: activeLocationId || '',
           referenceShotId: sourceShotId, // KEY: Set source shot as reference for visual consistency

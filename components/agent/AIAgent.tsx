@@ -379,6 +379,7 @@ function applyActions(
           dialogueLines: [],
           shotType: (p?.shotType as Shot['shotType']) || 'Medium',
           cameraMove: (p?.cameraMove as Shot['cameraMove']) || 'Static',
+          composition: 'None',
           characters: (p?.characterIds as string[]) || [],
           locationId: (p?.locationId as string) || updated.locations?.[0]?.id || '',
           videoPrompt: (p?.videoPrompt as string) || '',
@@ -1347,13 +1348,12 @@ export const AIAgent: React.FC<AIAgentProps> = ({
                   </div>
                 )}
                 <div
-                  className={`max-w-[85%] px-3 py-2 rounded-xl text-sm leading-relaxed ${
-                    msg.role === 'user'
+                  className={`max-w-[85%] px-3 py-2 rounded-xl text-sm leading-relaxed ${msg.role === 'user'
                       ? 'bg-red-600 text-white rounded-br-sm'
                       : msg.error
-                      ? 'bg-red-950 border border-red-800 text-red-300 rounded-bl-sm'
-                      : 'bg-neutral-800 text-neutral-200 rounded-bl-sm'
-                  }`}
+                        ? 'bg-red-950 border border-red-800 text-red-300 rounded-bl-sm'
+                        : 'bg-neutral-800 text-neutral-200 rounded-bl-sm'
+                    }`}
                 >
                   <div>{renderText(msg.text)}</div>
 
@@ -1365,12 +1365,11 @@ export const AIAgent: React.FC<AIAgentProps> = ({
                         .slice(0, 10)
                         .map((a, i) => (
                           <div key={i} className="flex items-center gap-1.5">
-                            <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
-                              a.type.startsWith('GENERATE') ? 'bg-blue-400'
-                              : a.type.startsWith('INSERT') || a.type === 'CLEAR_TIMELINE' ? 'bg-purple-400'
-                              : a.type === 'BREAKDOWN_SCRIPT' ? 'bg-yellow-400'
-                              : 'bg-green-400'
-                            }`} />
+                            <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${a.type.startsWith('GENERATE') ? 'bg-blue-400'
+                                : a.type.startsWith('INSERT') || a.type === 'CLEAR_TIMELINE' ? 'bg-purple-400'
+                                  : a.type === 'BREAKDOWN_SCRIPT' ? 'bg-yellow-400'
+                                    : 'bg-green-400'
+                              }`} />
                             <span className="text-xs text-neutral-400">{a.description}</span>
                           </div>
                         ))}

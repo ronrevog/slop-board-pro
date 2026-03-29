@@ -28,6 +28,16 @@ export type CameraMove =
   | 'Zoom Out'
   | 'Whip Pan';
 
+export type CompositionTechnique =
+  | 'None'
+  | 'Rule of Thirds'
+  | 'Golden Ratio'
+  | 'Symmetry'
+  | 'Negative Space'
+  | 'Juxtaposition'
+  | 'Diagonal Lines'
+  | 'Golden Triangle';
+
 export type Resolution = 'basic' | '720p' | '1080p' | '4k';
 
 export interface CinematicSettings {
@@ -152,6 +162,7 @@ export interface Shot {
   dialogueLines: DialogueLine[];
   shotType: ShotType;
   cameraMove: CameraMove;
+  composition: CompositionTechnique;
   characters: string[]; // IDs of characters present in shot
   locationId: string;
   referenceShotId?: string; // ID of another shot to use as visual reference
