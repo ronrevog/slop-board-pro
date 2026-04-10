@@ -2,7 +2,7 @@
 import React, { useState, useRef } from 'react';
 import { Shot, VideoSegment, VideoProviderSettings, DEFAULT_VIDEO_SETTINGS } from '../types';
 import { AuroraGenerationSettings, uploadFileToFal } from '../services/falService';
-import { SeedanceGenerationSettings } from '../services/seedanceService';
+import { SeedanceGenerationSettings, SEEDANCE_MODELS, SEEDANCE_DURATIONS, SEEDANCE_ASPECT_RATIOS, SEEDANCE_RESOLUTIONS, modelRequiresImage, modelAcceptsReference } from '../services/seedanceService';
 import { Button } from './Button';
 import { Download, Loader2, Clapperboard, Video, ImageIcon, MonitorPlay, RefreshCw, Film, Play, AlertTriangle, X, Camera, Settings, ChevronDown, ChevronUp, CheckSquare, Square, Music, Upload, Mic, StopCircle, Trash2, Archive } from 'lucide-react';
 import JSZip from 'jszip';
@@ -165,9 +165,13 @@ export const VideoShotCard: React.FC<VideoShotCardProps> = ({
 
   // Seedance settings state (initialized from project settings)
   const [seedanceSettings, setSeedanceSettings] = useState<SeedanceGenerationSettings>({
-    taskType: projectVideoSettings?.seedanceTaskType || 'seedance-2-preview',
-    duration: projectVideoSettings?.seedanceDuration || 5,
+    model: projectVideoSettings?.seedanceModel || 'image-to-video',
+    duration: projectVideoSettings?.seedanceDuration || '5',
     aspectRatio: projectVideoSettings?.seedanceAspectRatio || '16:9',
+    resolution: projectVideoSettings?.seedanceResolution || '720p',
+    seed: projectVideoSettings?.seedanceSeed,
+    negativePrompt: projectVideoSettings?.seedanceNegativePrompt || '',
+    enableSafetyChecker: projectVideoSettings?.seedanceEnableSafetyChecker,
   });
 
   // Show/hide Seedance settings panel
@@ -481,7 +485,7 @@ export const VideoShotCard: React.FC<VideoShotCardProps> = ({
                   }`}>
                   {selectedProvider === 'wan' ? 'Wan v2.6 (fal.ai)'
                     : selectedProvider === 'aurora' ? 'Lip Sync — Aurora (fal.ai)'
-                      : selectedProvider === 'seedance' ? 'Seedance 2 (PiAPI)'
+                      : selectedProvider === 'seedance' ? 'Seedance 2.0 (fal.ai)'
                         : videoModelLabel}
                 </div>
                 {/* Indeterminate progress bar */}
@@ -948,29 +952,44 @@ export const VideoShotCard: React.FC<VideoShotCardProps> = ({
                 {/* Seedance Settings Panel */}
                 {showSeedanceSettings && (
                   <div className="bg-neutral-800/30 border border-neutral-700 rounded-lg p-3 space-y-3 animate-fade-in">
-                    {/* Model & Duration Row */}
+                    {/* Model Selection */}
+                    <div className="space-y-1">
+                      <label className="text-[10px] text-neutral-500 uppercase">Model</label>
+                      <select
+                        className="w-full bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs text-white"
+                        value={seedanceSettings.model}
+                        onChange={(e) => setSeedanceSettings(s => ({ ...s, model: e.target.value as any }))}
+                      >
+                        {SEEDANCE_MODELS.map(m => (
+                          <option key={m.value} value={m.value}>{m.label} — {m.description}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {/* Duration & Resolution Row */}
                     <div className="grid grid-cols-2 gap-2">
-                      <div className="space-y-1">
-                        <label className="text-[10px] text-neutral-500 uppercase">Model</label>
-                        <select
-                          className="w-full bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs text-white"
-                          value={seedanceSettings.taskType}
-                          onChange={(e) => setSeedanceSettings(s => ({ ...s, taskType: e.target.value as any }))}
-                        >
-                          <option value="seedance-2-preview">Quality ($0.15/s)</option>
-                          <option value="seedance-2-fast-preview">Fast ($0.08/s)</option>
-                        </select>
-                      </div>
                       <div className="space-y-1">
                         <label className="text-[10px] text-neutral-500 uppercase">Duration</label>
                         <select
                           className="w-full bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs text-white"
                           value={seedanceSettings.duration}
-                          onChange={(e) => setSeedanceSettings(s => ({ ...s, duration: parseInt(e.target.value) as 5 | 10 | 15 }))}
+                          onChange={(e) => setSeedanceSettings(s => ({ ...s, duration: e.target.value as any }))}
                         >
-                          <option value="5">5 sec</option>
-                          <option value="10">10 sec</option>
-                          <option value="15">15 sec</option>
+                          {SEEDANCE_DURATIONS.map(d => (
+                            <option key={d.value} value={d.value}>{d.label}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-[10px] text-neutral-500 uppercase">Resolution</label>
+                        <select
+                          className="w-full bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs text-white"
+                          value={seedanceSettings.resolution}
+                          onChange={(e) => setSeedanceSettings(s => ({ ...s, resolution: e.target.value as any }))}
+                        >
+                          {SEEDANCE_RESOLUTIONS.map(r => (
+                            <option key={r.value} value={r.value}>{r.label}</option>
+                          ))}
                         </select>
                       </div>
                     </div>
@@ -983,45 +1002,63 @@ export const VideoShotCard: React.FC<VideoShotCardProps> = ({
                         value={seedanceSettings.aspectRatio}
                         onChange={(e) => setSeedanceSettings(s => ({ ...s, aspectRatio: e.target.value as any }))}
                       >
-                        <option value="16:9">16:9 (Landscape)</option>
-                        <option value="9:16">9:16 (Portrait)</option>
-                        <option value="4:3">4:3 (Classic)</option>
-                        <option value="3:4">3:4 (Portrait Classic)</option>
+                        {SEEDANCE_ASPECT_RATIOS.map(a => (
+                          <option key={a.value} value={a.value}>{a.label}</option>
+                        ))}
                       </select>
                     </div>
 
-                    {/* Image URL Input */}
+                    {/* Negative Prompt */}
                     <div className="space-y-1">
-                      <label className="text-[10px] text-neutral-500 uppercase">Image Reference URL (optional)</label>
+                      <label className="text-[10px] text-neutral-500 uppercase">Negative Prompt</label>
                       <input
-                        type="url"
+                        type="text"
                         className="w-full bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs text-white placeholder-neutral-600"
-                        placeholder="https://... (use @image1 in prompt)"
-                        value={seedanceSettings.imageUrls?.[0] || ''}
-                        onChange={(e) => setSeedanceSettings(s => ({
-                          ...s,
-                          imageUrls: e.target.value ? [e.target.value] : undefined
-                        }))}
+                        placeholder="low quality, blurry..."
+                        value={seedanceSettings.negativePrompt || ''}
+                        onChange={(e) => setSeedanceSettings(s => ({ ...s, negativePrompt: e.target.value }))}
                       />
-                      <p className="text-[9px] text-neutral-600">
-                        Use @image1 in prompt to reference. Must be a public URL.
-                      </p>
                     </div>
 
-                    {/* Pricing Info */}
+                    {/* Seed */}
+                    <div className="space-y-1">
+                      <label className="text-[10px] text-neutral-500 uppercase">Seed (optional)</label>
+                      <input
+                        type="number"
+                        className="w-full bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs text-white placeholder-neutral-600"
+                        placeholder="Random"
+                        value={seedanceSettings.seed || ''}
+                        onChange={(e) => setSeedanceSettings(s => ({ ...s, seed: e.target.value ? parseInt(e.target.value) : undefined }))}
+                      />
+                    </div>
+
+                    {/* Model-specific hints */}
                     <div className="text-[9px] text-neutral-600 bg-neutral-800/50 rounded p-2">
-                      <p>💰 Est. cost: <span className="text-emerald-400 font-mono">
-                        ${(seedanceSettings.duration * (seedanceSettings.taskType === 'seedance-2-preview' ? 0.15 : 0.08)).toFixed(2)}
-                      </span></p>
-                      <p className="mt-1">⏰ Peak hours (09:00-15:00 GMT): Queue times may be longer</p>
+                      {modelRequiresImage(seedanceSettings.model) && (
+                        <p>🖼️ Uses storyboard image as input (image-to-video)</p>
+                      )}
+                      {modelAcceptsReference(seedanceSettings.model) && (
+                        <p>🎨 Reference image(s) will be passed from storyboard</p>
+                      )}
+                      {!modelRequiresImage(seedanceSettings.model) && !modelAcceptsReference(seedanceSettings.model) && (
+                        <p>📝 Text-only generation (no image input)</p>
+                      )}
+                      <p className="mt-1">⚡ Powered by fal.ai SDK (Seedance 2.0)</p>
                     </div>
                   </div>
                 )}
 
                 {/* API Key Warning */}
-                {!projectVideoSettings?.piapiApiKey && (
+                {!projectVideoSettings?.falApiKey && (
                   <div className="text-xs text-emerald-400 bg-emerald-900/20 border border-emerald-900/30 rounded px-2 py-1">
-                    ⚠️ Add PiAPI API key in Project Settings
+                    ⚠️ Add fal.ai API key in Project Settings
+                  </div>
+                )}
+
+                {/* Image required warning for image-to-video */}
+                {modelRequiresImage(seedanceSettings.model) && !shot.imageUrl && (
+                  <div className="text-xs text-yellow-400 bg-yellow-900/20 border border-yellow-900/30 rounded px-2 py-1">
+                    ⚠️ Generate a storyboard image first (required for Image → Video)
                   </div>
                 )}
 
@@ -1029,7 +1066,7 @@ export const VideoShotCard: React.FC<VideoShotCardProps> = ({
                 <Button
                   variant="primary"
                   onClick={() => onGenerateSeedance(shot.id, seedanceSettings)}
-                  disabled={shot.isVideoGenerating || shot.isExtending || !projectVideoSettings?.piapiApiKey}
+                  disabled={shot.isVideoGenerating || shot.isExtending || !projectVideoSettings?.falApiKey || (modelRequiresImage(seedanceSettings.model) && !shot.imageUrl)}
                   className="w-full h-12 bg-emerald-600 hover:bg-emerald-700"
                 >
                   {shot.videoUrl

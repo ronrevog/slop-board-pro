@@ -9,7 +9,7 @@ import { Button } from './Button';
 import { ShotDetailModal } from './ShotDetailModal';
 import { VideoShotCard, WanGenerationSettings } from './VideoShotCard';
 import { generateWanVideo, generateAuroraVideo, validateFalApiKey, AuroraGenerationSettings, uploadFileToFal } from '../services/falService';
-import { generateSeedanceVideo, SeedanceGenerationSettings, uploadFileToPiAPI } from '../services/seedanceService';
+import { generateSeedanceVideo, SeedanceGenerationSettings, uploadImageToFalStorage } from '../services/seedanceService';
 import { MotionControl } from './MotionControl';
 import { Clapperboard, Settings, Users, MapPin, Film, ChevronRight, LayoutGrid, Plus, ChevronLeft, Home, Video, Play, Loader2, Download, AlertCircle, ImageIcon, MonitorPlay, Layers, Trash2, Edit3, ChevronDown, ChevronUp, Focus, FileText, Upload, CheckSquare, Square, Bot, Clock } from 'lucide-react';
 import { AIAgent } from './agent/AIAgent';
@@ -73,16 +73,12 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ initialProject, on
   // Auto-populate API keys from localStorage on mount (so keys persist across projects/sessions)
   useEffect(() => {
     const savedFalKey = localStorage.getItem('slop_fal_api_key');
-    const savedPiapiKey = localStorage.getItem('slop_piapi_api_key');
-    let needsUpdate = false;
 
     setProject(prev => {
       const vs = prev.videoSettings || DEFAULT_VIDEO_SETTINGS;
       const newFal = !vs.falApiKey && savedFalKey ? savedFalKey : vs.falApiKey;
-      const newPiapi = !vs.piapiApiKey && savedPiapiKey ? savedPiapiKey : vs.piapiApiKey;
-      if (newFal !== vs.falApiKey || newPiapi !== vs.piapiApiKey) {
-        needsUpdate = true;
-        return { ...prev, videoSettings: { ...vs, falApiKey: newFal, piapiApiKey: newPiapi } };
+      if (newFal !== vs.falApiKey) {
+        return { ...prev, videoSettings: { ...vs, falApiKey: newFal } };
       }
       return prev;
     });
@@ -100,11 +96,6 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ initialProject, on
     if (falKey?.trim()) {
       localStorage.setItem('slop_fal_api_key', falKey.trim());
       setFalKeyStatus('valid');
-    }
-    // PiAPI key
-    const piapiKey = project.videoSettings?.piapiApiKey;
-    if (piapiKey?.trim()) {
-      localStorage.setItem('slop_piapi_api_key', piapiKey.trim());
     }
     // Save project too
     onSave(project);
@@ -1507,17 +1498,17 @@ Style: ${project.settings.cinematographer}, shot on ${project.settings.filmStock
     return new File([u8arr], filename, { type: mime });
   };
 
-  // --- Seedance 2 Video Generation (PiAPI) ---
+  // --- Seedance 2.0 Video Generation (fal.ai SDK) ---
   const handleGenerateSeedanceVideo = async (shotId: string, seedSettings: SeedanceGenerationSettings) => {
     if (!activeSceneId) return;
     const shot = currentShots.find(s => s.id === shotId);
     if (!shot) return;
 
     const videoSettings = project.videoSettings || DEFAULT_VIDEO_SETTINGS;
-    if (!videoSettings.piapiApiKey) {
-      console.error('PiAPI API key not configured');
+    if (!videoSettings.falApiKey) {
+      console.error('fal.ai API key not configured');
       updateSceneShots(activeSceneId, shots =>
-        shots.map(s => s.id === shotId ? { ...s, videoError: 'PiAPI API key not configured. Go to Settings tab.' } : s)
+        shots.map(s => s.id === shotId ? { ...s, videoError: 'fal.ai API key not configured. Go to Settings tab.' } : s)
       );
       return;
     }
@@ -1527,47 +1518,38 @@ Style: ${project.settings.cinematographer}, shot on ${project.settings.filmStock
     );
 
     try {
-      let promptToUse = shot.videoPrompt || synthesizeVideoPrompt(shot);
-      const finalSettings = { ...seedSettings };
+      const promptToUse = shot.videoPrompt || synthesizeVideoPrompt(shot);
 
-      // Auto-upload storyboard image for image-to-video if available
-      // Only if the user hasn't already manually set image URLs
-      if (shot.imageUrl && (!finalSettings.imageUrls || finalSettings.imageUrls.length === 0)) {
+      // Prepare image URL for image-to-video or reference-to-video models
+      let imageUrl: string | undefined = undefined;
+      if (shot.imageUrl) {
         if (shot.imageUrl.startsWith('data:')) {
           try {
-            // Upload base64 image to PiAPI's ephemeral storage (uses same PiAPI key)
-            console.log('Uploading storyboard image to PiAPI for Seedance image-to-video...');
-            const publicUrl = await uploadFileToPiAPI(shot.imageUrl, videoSettings.piapiApiKey);
-            finalSettings.imageUrls = [publicUrl];
-            // Prepend @image1 reference to prompt if not already present
-            if (!promptToUse.includes('@image1')) {
-              promptToUse = `The scene in @image1. ${promptToUse}`;
-            }
-            console.log('Storyboard image uploaded to PiAPI for Seedance:', publicUrl);
+            console.log('Uploading storyboard image to fal.ai storage for Seedance...');
+            imageUrl = await uploadImageToFalStorage(shot.imageUrl, videoSettings.falApiKey!);
+            console.log('Storyboard image uploaded to fal.ai storage:', imageUrl);
           } catch (uploadErr) {
-            console.warn('Could not upload storyboard image to PiAPI, falling back to text-only:', uploadErr);
+            console.warn('Could not upload storyboard image, trying direct data URI:', uploadErr);
+            imageUrl = shot.imageUrl;
           }
-        } else if (shot.imageUrl.startsWith('http')) {
-          // Already a public URL, use directly
-          finalSettings.imageUrls = [shot.imageUrl];
-          if (!promptToUse.includes('@image1')) {
-            promptToUse = `The scene in @image1. ${promptToUse}`;
-          }
+        } else {
+          imageUrl = shot.imageUrl;
         }
       }
 
-      const result = await generateSeedanceVideo(
+      const videoUrl = await generateSeedanceVideo(
         promptToUse,
-        videoSettings.piapiApiKey,
-        finalSettings
+        imageUrl,
+        videoSettings.falApiKey!,
+        seedSettings
       );
 
+      const isFastModel = seedSettings.model.startsWith('fast/');
       const newSegment: VideoSegment = {
         id: crypto.randomUUID(),
-        url: result.videoUrl,
-        seedanceTaskId: result.taskId,
+        url: videoUrl,
         timestamp: Date.now(),
-        model: seedSettings.taskType === 'seedance-2-preview' ? 'quality' : 'fast',
+        model: isFastModel ? 'fast' : 'quality',
         isExtension: false
       };
 
@@ -1577,7 +1559,7 @@ Style: ${project.settings.cinematographer}, shot on ${project.settings.filmStock
         shots.map(s => s.id === shotId ? {
           ...s,
           isVideoGenerating: false,
-          videoUrl: result.videoUrl,
+          videoUrl,
           videoSegments: [...existingSegments, newSegment],
           videoError: undefined
         } : s)
@@ -1591,25 +1573,15 @@ Style: ${project.settings.cinematographer}, shot on ${project.settings.filmStock
     }
   };
 
-  // --- Seedance 2 Extend Video ---
+  // --- Seedance 2.0 Extend Video (regenerate with last frame as source) ---
   const handleExtendSeedanceVideo = async (shotId: string, seedSettings: SeedanceGenerationSettings) => {
     if (!activeSceneId) return;
     const shot = currentShots.find(s => s.id === shotId);
-    if (!shot || !shot.videoSegments) return;
-
-    // Find the last segment with a seedanceTaskId
-    const lastSeedanceSegment = [...shot.videoSegments].reverse().find(s => s.seedanceTaskId);
-    if (!lastSeedanceSegment?.seedanceTaskId) {
-      console.error('No Seedance task ID found for extension');
-      updateSceneShots(activeSceneId, shots =>
-        shots.map(s => s.id === shotId ? { ...s, videoError: 'No Seedance task ID found. Generate a Seedance video first.' } : s)
-      );
-      return;
-    }
+    if (!shot || !shot.videoUrl) return;
 
     const videoSettings = project.videoSettings || DEFAULT_VIDEO_SETTINGS;
-    if (!videoSettings.piapiApiKey) {
-      console.error('PiAPI API key not configured');
+    if (!videoSettings.falApiKey) {
+      console.error('fal.ai API key not configured');
       return;
     }
 
@@ -1618,26 +1590,43 @@ Style: ${project.settings.cinematographer}, shot on ${project.settings.filmStock
     );
 
     try {
-      // Use parent_task_id to extend the video
-      const extendSettings: SeedanceGenerationSettings = {
-        ...seedSettings,
-        parentTaskId: lastSeedanceSegment.seedanceTaskId,
-      };
-
       const promptToUse = shot.videoPrompt || synthesizeVideoPrompt(shot);
 
-      const result = await generateSeedanceVideo(
+      // Extract last frame from existing video to use as source for extension
+      let imageUrl: string | undefined = undefined;
+      try {
+        console.log('Extracting last frame from existing video for Seedance extension...');
+        const lastFrame = await extractLastFrameFromVideo(shot.videoUrl);
+        imageUrl = await uploadImageToFalStorage(lastFrame, videoSettings.falApiKey!);
+        console.log('Last frame uploaded for extension:', imageUrl);
+      } catch (frameErr) {
+        console.warn('Could not extract last frame, using storyboard image:', frameErr);
+        if (shot.imageUrl) {
+          imageUrl = shot.imageUrl.startsWith('data:')
+            ? await uploadImageToFalStorage(shot.imageUrl, videoSettings.falApiKey!)
+            : shot.imageUrl;
+        }
+      }
+
+      // Force image-to-video model for extensions (needs the last frame)
+      const extendSettings: SeedanceGenerationSettings = {
+        ...seedSettings,
+        model: 'image-to-video',
+      };
+
+      const videoUrl = await generateSeedanceVideo(
         promptToUse,
-        videoSettings.piapiApiKey,
+        imageUrl,
+        videoSettings.falApiKey!,
         extendSettings
       );
 
+      const isFastModel = seedSettings.model.startsWith('fast/');
       const newSegment: VideoSegment = {
         id: crypto.randomUUID(),
-        url: result.videoUrl,
-        seedanceTaskId: result.taskId,
+        url: videoUrl,
         timestamp: Date.now(),
-        model: seedSettings.taskType === 'seedance-2-preview' ? 'quality' : 'fast',
+        model: isFastModel ? 'fast' : 'quality',
         isExtension: true
       };
 
@@ -1647,7 +1636,7 @@ Style: ${project.settings.cinematographer}, shot on ${project.settings.filmStock
         shots.map(s => s.id === shotId ? {
           ...s,
           isExtending: false,
-          videoUrl: result.videoUrl,
+          videoUrl,
           videoSegments: [...existingSegments, newSegment],
           videoError: undefined
         } : s)
@@ -2357,7 +2346,7 @@ TIP: Select (highlight) a portion of text and click 'Analyze Scene' to analyze o
                 {/* fal.ai API Key */}
                 <div className="space-y-2">
                   <label className="text-xs font-bold text-neutral-500 uppercase tracking-widest">
-                    fal.ai API Key <span className="text-neutral-600">(Wan v2.6 + Lip Sync)</span>
+                    fal.ai API Key <span className="text-neutral-600">(Wan v2.6 + Seedance 2.0 + Lip Sync)</span>
                   </label>
                   <div className="flex gap-2">
                     <input
@@ -2461,47 +2450,6 @@ TIP: Select (highlight) a portion of text and click 'Analyze Scene' to analyze o
                   </p>
                 </div>
 
-                {/* PiAPI API Key (Seedance) */}
-                <div className="space-y-2">
-                  <label className="text-xs font-bold text-neutral-500 uppercase tracking-widest">
-                    PiAPI API Key <span className="text-neutral-600">(Seedance 2)</span>
-                  </label>
-                  <div className="flex gap-2">
-                    <input
-                      type="password"
-                      className={`flex-1 bg-neutral-800 border rounded-md p-3 text-sm text-white focus:ring-1 focus:ring-emerald-500 outline-none ${project.videoSettings?.piapiApiKey ? 'border-green-600' : 'border-neutral-700'}`}
-                      placeholder="Enter your PiAPI API key..."
-                      value={project.videoSettings?.piapiApiKey || ''}
-                      onChange={(e) => {
-                        setProject(p => ({
-                          ...p,
-                          videoSettings: { ...(p.videoSettings || DEFAULT_VIDEO_SETTINGS), piapiApiKey: e.target.value }
-                        }));
-                      }}
-                    />
-                    <Button
-                      variant={project.videoSettings?.piapiApiKey ? 'secondary' : 'primary'}
-                      onClick={() => {
-                        if (project.videoSettings?.piapiApiKey) {
-                          onSave(project);
-                        }
-                      }}
-                      disabled={!project.videoSettings?.piapiApiKey}
-                      className="whitespace-nowrap"
-                    >
-                      {project.videoSettings?.piapiApiKey ? '✓ Save' : 'Save Key'}
-                    </Button>
-                  </div>
-                  {project.videoSettings?.piapiApiKey && (
-                    <p className="text-xs text-green-500 flex items-center gap-1">
-                      <CheckSquare className="w-3 h-3" /> PiAPI key configured
-                    </p>
-                  )}
-                  <p className="text-xs text-neutral-600">
-                    Powers Seedance 2 video generation. Get yours from <a href="https://piapi.ai/dashboard" target="_blank" rel="noopener noreferrer" className="text-emerald-500 hover:underline">piapi.ai/dashboard</a>
-                  </p>
-                </div>
-
                 {/* Master Save All Keys */}
                 <div className="pt-4 border-t border-neutral-700">
                   <Button
@@ -2552,8 +2500,8 @@ TIP: Select (highlight) a portion of text and click 'Analyze Scene' to analyze o
                       : 'border-neutral-700 bg-neutral-800/50 text-neutral-400 hover:border-neutral-500'
                       }`}
                   >
-                    <div className="font-bold text-sm mb-1">Seedance 2</div>
-                    <div className="text-xs text-neutral-500">PiAPI, 5-15s</div>
+                    <div className="font-bold text-sm mb-1">Seedance 2.0</div>
+                    <div className="text-xs text-neutral-500">fal.ai, 4-15s</div>
                   </button>
                   <button
                     onClick={() => setProject(p => ({ ...p, videoSettings: { ...(p.videoSettings || DEFAULT_VIDEO_SETTINGS), provider: 'fal-aurora' } }))}

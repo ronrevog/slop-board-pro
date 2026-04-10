@@ -55,7 +55,6 @@ export type VideoProvider = 'veo' | 'fal-wan' | 'fal-aurora' | 'seedance';
 export interface VideoProviderSettings {
   provider: VideoProvider;
   falApiKey?: string;
-  piapiApiKey?: string;
   // Wan v2.6 specific settings
   wanResolution: '720p' | '1080p';
   wanDuration: '5' | '10' | '15';
@@ -71,10 +70,14 @@ export interface VideoProviderSettings {
   auroraAudioGuidanceScale: number;
   auroraAudioUrl?: string;
   auroraPrompt?: string;
-  // Seedance 2 (PiAPI) specific settings
-  seedanceTaskType: 'seedance-2-preview' | 'seedance-2-fast-preview';
-  seedanceDuration: 5 | 10 | 15;
-  seedanceAspectRatio: '16:9' | '9:16' | '4:3' | '3:4';
+  // Seedance 2.0 (fal.ai) specific settings
+  seedanceModel: 'image-to-video' | 'text-to-video' | 'reference-to-video' | 'fast/text-to-video' | 'fast/reference-to-video';
+  seedanceDuration: 'auto' | '4' | '5' | '6' | '7' | '8' | '9' | '10' | '11' | '12' | '13' | '14' | '15';
+  seedanceAspectRatio: 'auto' | '21:9' | '16:9' | '4:3' | '1:1' | '3:4' | '9:16';
+  seedanceResolution: '480p' | '720p';
+  seedanceSeed?: number;
+  seedanceNegativePrompt?: string;
+  seedanceEnableSafetyChecker?: boolean;
 }
 
 export interface TurnaroundImage {
@@ -221,7 +224,8 @@ export const DEFAULT_VIDEO_SETTINGS: VideoProviderSettings = {
   auroraResolution: '720p',
   auroraGuidanceScale: 1,
   auroraAudioGuidanceScale: 2,
-  seedanceTaskType: 'seedance-2-preview',
-  seedanceDuration: 5,
+  seedanceModel: 'image-to-video',
+  seedanceDuration: '5',
   seedanceAspectRatio: '16:9',
+  seedanceResolution: '720p',
 };
