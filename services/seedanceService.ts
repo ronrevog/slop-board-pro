@@ -214,33 +214,48 @@ export const generateSeedanceVideo = async (
 
     const endpointId = getEndpointId(settings.model);
 
-    // Build the base input (shared across all models)
-    const baseInput: SeedanceBaseInput = {
+    // Build the base input — only include fields the API actually accepts
+    // The Seedance 2.0 API does NOT support: negative_prompt, enable_safety_checker
+    let input: Record<string, any> = {
         prompt,
-        duration: settings.duration,
-        aspect_ratio: settings.aspectRatio,
-        resolution: settings.resolution,
-        seed: settings.seed,
-        negative_prompt: settings.negativePrompt || undefined,
-        enable_safety_checker: settings.enableSafetyChecker,
     };
 
-    let input: Record<string, any> = { ...baseInput };
+    // Only add optional fields if they have non-default values
+    if (settings.duration && settings.duration !== 'auto') {
+        input.duration = settings.duration;
+    }
+    if (settings.aspectRatio && settings.aspectRatio !== 'auto') {
+        input.aspect_ratio = settings.aspectRatio;
+    }
+    if (settings.resolution) {
+        input.resolution = settings.resolution;
+    }
+    if (settings.seed !== undefined && settings.seed !== null) {
+        input.seed = settings.seed;
+    }
 
     // Model-specific input
     if (settings.model === 'image-to-video') {
-        // image-to-video requires image_url
+        // image-to-video requires image_url (must be a proper URL, not data URI)
         if (!imageUrl) {
             throw new Error('Image URL is required for image-to-video. Generate a storyboard image first.');
         }
-        const preparedUrl = await prepareImageUrl(imageUrl);
-        input.image_url = preparedUrl;
+        // If it's a data URI, upload to fal.ai storage first
+        if (imageUrl.startsWith('data:')) {
+            console.log('Uploading image to fal.ai storage for Seedance image-to-video...');
+            input.image_url = await uploadImageToFalStorage(imageUrl, falApiKey);
+        } else {
+            input.image_url = imageUrl;
+        }
     } else if (modelAcceptsReference(settings.model)) {
-        // reference-to-video: pass reference images
+        // reference-to-video: pass reference images (must be proper URLs)
         if (imageUrl) {
-            const preparedUrl = await prepareImageUrl(imageUrl);
-            input.reference_image_url = preparedUrl;
-            input.image_url = preparedUrl;
+            let uploadedUrl = imageUrl;
+            if (imageUrl.startsWith('data:')) {
+                uploadedUrl = await uploadImageToFalStorage(imageUrl, falApiKey);
+            }
+            input.reference_image_url = uploadedUrl;
+            input.image_url = uploadedUrl;
         }
         if (settings.referenceImages && settings.referenceImages.length > 0) {
             input.reference_images = settings.referenceImages;
