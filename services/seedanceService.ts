@@ -222,9 +222,9 @@ export const generateSeedanceVideo = async (
     let input: Record<string, any> = { prompt };
 
     // duration: API expects a string literal ('auto' | '4' | '5' | ... | '15')
-    // Always send it — 'auto' is a valid value for this API
-    if (settings.duration) {
-        input.duration = settings.duration;
+    // Always coerce to string — saved project data may hold a number (e.g. 5 instead of '5')
+    if (settings.duration !== undefined && settings.duration !== null) {
+        input.duration = String(settings.duration);
     }
 
     // aspect_ratio and resolution are only valid for text-to-video / reference-to-video.
