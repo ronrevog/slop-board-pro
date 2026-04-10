@@ -219,7 +219,12 @@ export const generateSeedanceVideo = async (
     //   - duration: string literal union ('auto' | '4' | '5' | ... | '15') — NOT an integer
     //   - aspect_ratio / resolution: NOT valid for image-to-video (determined by input image)
     //   - negative_prompt, enable_safety_checker: NOT supported
-    let input: Record<string, any> = { prompt };
+    let input: Record<string, any> = {
+        prompt,
+        // Disable safety checker to avoid false-positive "real person likeness" blocks
+        // on AI-generated storyboard characters
+        enable_safety_checker: false,
+    };
 
     // duration: API expects a string literal ('auto' | '4' | '5' | ... | '15')
     // Always coerce to string — saved project data may hold a number (e.g. 5 instead of '5')
