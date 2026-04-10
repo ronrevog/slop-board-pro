@@ -216,20 +216,26 @@ export const generateSeedanceVideo = async (
 
     // Build the base input — only include fields the API actually accepts
     // The Seedance 2.0 API does NOT support: negative_prompt, enable_safety_checker
-    let input: Record<string, any> = {
-        prompt,
-    };
+    // - Omit 'auto' values (API does not accept the literal string "auto")
+    // - duration must be an integer (number of seconds), NOT a string
+    let input: Record<string, any> = { prompt };
 
-    // Only add optional fields if they have non-default values
     if (settings.duration && settings.duration !== 'auto') {
-        input.duration = settings.duration;
+        // API expects an integer (e.g. 5), not a string (e.g. "5")
+        input.duration = parseInt(settings.duration, 10);
     }
-    if (settings.aspectRatio && settings.aspectRatio !== 'auto') {
-        input.aspect_ratio = settings.aspectRatio;
+
+    // aspect_ratio and resolution are only valid for text-to-video / reference-to-video.
+    // For image-to-video both are determined by the input image — sending them causes 422.
+    if (settings.model !== 'image-to-video') {
+        if (settings.aspectRatio && settings.aspectRatio !== 'auto') {
+            input.aspect_ratio = settings.aspectRatio;
+        }
+        if (settings.resolution) {
+            input.resolution = settings.resolution;
+        }
     }
-    if (settings.resolution) {
-        input.resolution = settings.resolution;
-    }
+
     if (settings.seed !== undefined && settings.seed !== null) {
         input.seed = settings.seed;
     }
@@ -248,14 +254,14 @@ export const generateSeedanceVideo = async (
             input.image_url = imageUrl;
         }
     } else if (modelAcceptsReference(settings.model)) {
-        // reference-to-video: pass reference images (must be proper URLs)
+        // reference-to-video: only pass reference_image_url (not image_url — that
+        // field is specific to the image-to-video endpoint and causes a 422 here)
         if (imageUrl) {
             let uploadedUrl = imageUrl;
             if (imageUrl.startsWith('data:')) {
                 uploadedUrl = await uploadImageToFalStorage(imageUrl, falApiKey);
             }
             input.reference_image_url = uploadedUrl;
-            input.image_url = uploadedUrl;
         }
         if (settings.referenceImages && settings.referenceImages.length > 0) {
             input.reference_images = settings.referenceImages;
@@ -313,7 +319,9 @@ export const generateSeedanceVideo = async (
             return videoData.video.url;
         }
     } catch (error: any) {
+        // Log the full error object so the actual validation details appear in the console
         console.error('Seedance SDK error:', error);
+        console.error('Seedance error body:', error?.body ?? error?.detail ?? error?.response ?? '(no body)');
 
         if (error.status === 401 || error.message?.includes('401')) {
             throw new Error('fal.ai API key is invalid. Please check your key in Settings.');
@@ -325,7 +333,14 @@ export const generateSeedanceVideo = async (
             throw new Error('Network error - please check your connection and try again.');
         }
 
-        throw new Error(error.message || 'Seedance video generation failed');
+        // Expose the most informative error message available
+        const detail =
+            error?.body?.detail ??
+            error?.detail ??
+            error?.body?.message ??
+            error?.message ??
+            'Seedance video generation failed';
+        throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail));
     }
 };
 
