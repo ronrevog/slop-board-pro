@@ -214,21 +214,23 @@ export const generateSeedanceVideo = async (
 
     const endpointId = getEndpointId(settings.model);
 
-    // Build the base input — only include fields the API actually accepts
-    // The Seedance 2.0 API does NOT support: negative_prompt, enable_safety_checker
-    // - Omit 'auto' values (API does not accept the literal string "auto")
-    // - duration must be an integer (number of seconds), NOT a string
+    // Build the base input — only include fields the API actually accepts.
+    // Confirmed Seedance 2.0 schema:
+    //   - duration: string literal union ('auto' | '4' | '5' | ... | '15') — NOT an integer
+    //   - aspect_ratio / resolution: NOT valid for image-to-video (determined by input image)
+    //   - negative_prompt, enable_safety_checker: NOT supported
     let input: Record<string, any> = { prompt };
 
-    if (settings.duration && settings.duration !== 'auto') {
-        // API expects an integer (e.g. 5), not a string (e.g. "5")
-        input.duration = parseInt(settings.duration, 10);
+    // duration: API expects a string literal ('auto' | '4' | '5' | ... | '15')
+    // Always send it — 'auto' is a valid value for this API
+    if (settings.duration) {
+        input.duration = settings.duration;
     }
 
     // aspect_ratio and resolution are only valid for text-to-video / reference-to-video.
     // For image-to-video both are determined by the input image — sending them causes 422.
     if (settings.model !== 'image-to-video') {
-        if (settings.aspectRatio && settings.aspectRatio !== 'auto') {
+        if (settings.aspectRatio) {
             input.aspect_ratio = settings.aspectRatio;
         }
         if (settings.resolution) {
