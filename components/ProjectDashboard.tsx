@@ -1,7 +1,8 @@
 
 import React, { useRef, useState } from 'react';
+import { User } from 'firebase/auth';
 import { Project } from '../types';
-import { Plus, Film, Trash2, Calendar, Clapperboard, LayoutGrid, Download, Upload, CheckCircle, AlertCircle, ImagePlus, HardDrive, Shield } from 'lucide-react';
+import { Plus, Film, Trash2, Calendar, Clapperboard, LayoutGrid, Download, Upload, CheckCircle, AlertCircle, ImagePlus, HardDrive, Shield, LogOut } from 'lucide-react';
 import { Button } from './Button';
 import { exportProjectsToFile, importProjectsFromFile, exportSingleProjectToFile } from '../services/storage';
 
@@ -21,6 +22,8 @@ interface ProjectDashboardProps {
   onUpdateProject: (project: Project) => void;
   backupStatus?: BackupStatus;
   onSetBackupFile?: () => void;
+  authUser?: User | null;
+  onSignOut?: () => void;
 }
 
 export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
@@ -31,7 +34,9 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
   onRefresh,
   onUpdateProject,
   backupStatus,
-  onSetBackupFile
+  onSetBackupFile,
+  authUser,
+  onSignOut,
 }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const coverInputRef = useRef<HTMLInputElement>(null);
@@ -157,6 +162,24 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
             <p className="text-neutral-500 uppercase tracking-widest text-sm font-medium">Cinematic Project Manager</p>
           </div>
           <div className="flex items-center gap-3">
+            {/* User Account */}
+            {authUser && (
+              <div className="flex items-center gap-2 mr-2 pr-4 border-r border-neutral-800">
+                {authUser.photoURL && (
+                  <img src={authUser.photoURL} alt="" className="w-7 h-7 rounded-full ring-1 ring-neutral-700" referrerPolicy="no-referrer" />
+                )}
+                <span className="text-xs text-neutral-500 hidden lg:inline max-w-[120px] truncate">{authUser.displayName || authUser.email}</span>
+                {onSignOut && (
+                  <button
+                    onClick={onSignOut}
+                    className="p-1.5 text-neutral-600 hover:text-red-500 transition-colors"
+                    title="Sign out"
+                  >
+                    <LogOut className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
+            )}
             {/* Auto-Backup to Disk Button */}
             {backupStatus?.isSupported && onSetBackupFile && (
               <button
