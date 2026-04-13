@@ -28,6 +28,7 @@ import {
 } from 'firebase/storage';
 import { db, storage } from './firebase';
 import { getCurrentUser } from './firebaseAuth';
+import { saveProjectToDB } from './storage';
 import { Project } from '../types';
 
 // ============================================================
@@ -178,14 +179,45 @@ const projectsCol = (uid: string) => collection(db, 'users', uid, 'projects');
 /** Get a single project doc ref */
 const projectDoc = (uid: string, projectId: string) => doc(db, 'users', uid, 'projects', projectId);
 
+// Circuit breaker: stop cloud operations after repeated failures
+let _cloudFailCount = 0;
+const MAX_CLOUD_FAILS = 3;
+let _cloudDisabledUntil = 0;
+
+const isCloudAvailable = (): boolean => {
+    if (_cloudFailCount >= MAX_CLOUD_FAILS) {
+        if (Date.now() < _cloudDisabledUntil) return false;
+        // Reset after cooldown
+        _cloudFailCount = 0;
+    }
+    return true;
+};
+
+const recordCloudFailure = () => {
+    _cloudFailCount++;
+    if (_cloudFailCount >= MAX_CLOUD_FAILS) {
+        _cloudDisabledUntil = Date.now() + 60_000; // 1 min cooldown
+        console.warn('☁️ Cloud sync disabled for 60s after repeated failures');
+    }
+};
+
+const recordCloudSuccess = () => {
+    _cloudFailCount = 0;
+};
+
 /**
  * Save a project to Firestore (uploading images to Storage first).
+ * Returns the URL-ified project clone (base64 replaced with URLs) on success,
+ * or null on failure. Caller can use it to update local storage.
  */
-export const saveProjectToCloud = async (project: Project): Promise<void> => {
+export const saveProjectToCloud = async (project: Project): Promise<Project | null> => {
     const user = getCurrentUser();
     if (!user) {
         console.warn('Cannot save to cloud — not signed in');
-        return;
+        return null;
+    }
+    if (!isCloudAvailable()) {
+        return null;
     }
 
     try {
@@ -199,9 +231,12 @@ export const saveProjectToCloud = async (project: Project): Promise<void> => {
             _uid: user.uid,
         });
         console.log(`☁️ Project "${project.title}" saved to cloud`);
+        recordCloudSuccess();
+        return cloudProject;
     } catch (error: any) {
         console.error('Cloud save failed:', error);
-        // Don't throw — cloud save failure shouldn't break the app
+        recordCloudFailure();
+        return null;
     }
 };
 
@@ -267,9 +302,18 @@ export const scheduleCloudSync = (project: Project): void => {
     // Set new timer
     _syncTimers.set(
         project.id,
-        setTimeout(() => {
+        setTimeout(async () => {
             _syncTimers.delete(project.id);
-            saveProjectToCloud(project);
+            const urlProject = await saveProjectToCloud(project);
+            // Save URL-ified version back to local storage so next sync won't re-upload
+            if (urlProject) {
+                try {
+                    await saveProjectToDB(urlProject);
+                    console.log('☁️ Local storage updated with cloud URLs');
+                } catch (e) {
+                    // Non-critical
+                }
+            }
         }, SYNC_DEBOUNCE_MS)
     );
 };
