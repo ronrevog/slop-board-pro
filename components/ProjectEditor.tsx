@@ -1943,10 +1943,12 @@ Style: ${project.settings.cinematographer}, shot on ${project.settings.filmStock
             <button onClick={() => setActiveTab('settings')} className={`px-4 py-2 text-sm font-medium rounded-md transition-colors flex items-center gap-2 ${activeTab === 'settings' ? 'bg-neutral-800 text-white' : 'text-neutral-400 hover:text-white'}`}>
               <Settings className="w-3 h-3" /> Settings
             </button>
+            {/* Timeline tab hidden — feature not ready yet
             <ChevronRight className="w-4 h-4 text-neutral-600" />
             <button onClick={() => setActiveTab('timeline')} className={`px-4 py-2 text-sm font-medium rounded-md transition-colors flex items-center gap-2 ${activeTab === 'timeline' ? 'bg-blue-900/20 text-blue-400 border border-blue-900/30' : 'text-neutral-400 hover:text-white'}`}>
               <Clock className="w-3 h-3" /> Timeline
             </button>
+            */}
           </div>
           <div className="flex items-center gap-4">
             {/* SLOPBOT AI Agent Button */}
