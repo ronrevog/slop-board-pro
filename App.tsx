@@ -422,7 +422,7 @@ export default function App() {
             </button>
           </div>
 
-          <h1 className="text-4xl font-serif text-red-600 mb-4">Slop Board</h1>
+          <img src="/img/slopboard_logo_text.png" alt="Slop Board" className="h-10 w-auto mb-4 mx-auto" />
           <p className="text-neutral-400 mb-6">Enter your Google Gemini API Key to continue</p>
           <form onSubmit={handleSaveApiKey}>
             <input

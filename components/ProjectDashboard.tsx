@@ -154,11 +154,10 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
         {/* Header */}
         <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 border-b border-neutral-800 pb-8">
           <div className="space-y-2">
-            <h1 className="text-4xl md:text-5xl font-serif font-bold text-white tracking-tight flex items-center gap-3">
-              <Film className="w-10 h-10 text-red-600" />
-              Slop Board
-              <span className="text-xs font-normal text-neutral-600 ml-2">v1.4.4</span>
-            </h1>
+            <div className="flex items-center gap-3">
+              <img src="/img/slopboard_logo_text.png" alt="Slop Board" className="h-12 w-auto" />
+              <span className="text-xs font-normal text-neutral-600">v1.4.4</span>
+            </div>
             <p className="text-neutral-500 uppercase tracking-widest text-sm font-medium">Cinematic Project Manager</p>
           </div>
           <div className="flex items-center gap-3">
