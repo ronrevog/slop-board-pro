@@ -5,7 +5,6 @@
  */
 
 import React, { useState } from 'react';
-import { Film } from 'lucide-react';
 import { signInWithGoogle } from '../services/firebaseAuth';
 
 interface AuthGateProps {
@@ -33,14 +32,12 @@ export const AuthGate: React.FC<AuthGateProps> = ({ onSignedIn }) => {
         <div className="h-screen flex items-center justify-center bg-neutral-950 text-white p-8">
             <div className="w-full max-w-md text-center space-y-8">
                 {/* Logo */}
-                <div className="space-y-3">
-                    <div className="flex items-center justify-center gap-3">
-                        <Film className="w-12 h-12 text-red-600" />
-                        <h1 className="text-5xl font-serif font-bold tracking-tight">Slop Board</h1>
-                    </div>
-                    <p className="text-neutral-500 uppercase tracking-widest text-sm font-medium">
-                        Cinematic Project Manager
-                    </p>
+                <div className="flex flex-col items-center">
+                    <img
+                        src="/img/slopboard_logo_splash.png"
+                        alt="Slop Board Pro"
+                        className="w-72 h-auto"
+                    />
                 </div>
 
                 {/* Sign-in Card */}
