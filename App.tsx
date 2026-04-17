@@ -15,7 +15,7 @@ import {
   initFileBackupHandle,
   getFileBackupStatus,
 } from './services/storage';
-import { onAuthChange, signOut, getCurrentUser } from './services/firebaseAuth';
+import { onAuthChange, signOut } from './services/firebaseAuth';
 import {
   loadProjectsFromCloud,
   scheduleCloudSync,
@@ -199,10 +199,9 @@ export default function App() {
           // Use cloud projects as source of truth
           setProjects(cloudProjects);
 
-          // Also save cloud projects to local IndexedDB for offline access
-          for (const cp of cloudProjects) {
-            await saveProjectToDB(cp);
-          }
+          // Also save cloud projects to local IndexedDB for offline access.
+          // Run saves in parallel — each is an independent IndexedDB put.
+          await Promise.all(cloudProjects.map(saveProjectToDB));
           triggerAutoBackup(cloudProjects);
 
           // Check if there are local-only projects that aren't in the cloud
@@ -368,9 +367,8 @@ export default function App() {
       const cloudProjects = await loadProjectsFromCloud();
       if (cloudProjects.length > 0) {
         setProjects(cloudProjects);
-        for (const cp of cloudProjects) {
-          await saveProjectToDB(cp);
-        }
+        // Parallel IndexedDB writes — each project is independent.
+        await Promise.all(cloudProjects.map(saveProjectToDB));
       }
       setShowMigration(false);
     } catch (e) {

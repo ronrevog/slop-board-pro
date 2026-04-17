@@ -2,20 +2,12 @@
 import { GoogleGenAI } from "@google/genai";
 import { CinematicSettings, Character, Location, Shot, ChatMessage } from "../types";
 import { ANAMORPHIC_LENS_PROMPTS, COMPOSITION_PROMPTS } from "../constants";
+import { blobToBase64, getMimeType, stripBase64Header } from "./imageUtils";
 
 // Helper to sanitize JSON strings
 const cleanJson = (text: string) => {
   const match = text.match(/```json([\s\S]*?)```/);
   return match ? match[1].trim() : text.trim();
-};
-
-// Helper to strip data URI prefix for API calls
-const stripBase64Header = (base64: string) => {
-  return base64.replace(/^data:image\/\w+;base64,/, "");
-};
-
-const getMimeType = (base64: string) => {
-  return base64.match(/^data:(image\/\w+);base64,/)?.[1] || "image/jpeg";
 };
 
 // Map project resolution to Gemini image generation imageSize
@@ -66,16 +58,6 @@ const mapAspectRatio = (ratio: string): string => {
     '8:1': '8:1',
   };
   return mapping[ratio] || '16:9';
-};
-
-// Helper to convert Blob to Base64
-const blobToBase64 = (blob: Blob): Promise<string> => {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onloadend = () => resolve(reader.result as string);
-    reader.onerror = reject;
-    reader.readAsDataURL(blob);
-  });
 };
 
 // Helper to extract last frame from a video URL (Blob or Base64)

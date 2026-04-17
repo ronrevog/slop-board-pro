@@ -253,7 +253,17 @@ export const initDB = (): Promise<IDBDatabase> => {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
     request.onerror = () => reject(request.error);
-    request.onsuccess = () => resolve(request.result);
+    request.onsuccess = () => {
+      const db = request.result;
+      // If the DB is upgraded in another tab, drop our cached connection so the
+      // next call re-opens cleanly (this tab's connection would otherwise be
+      // stale and block writes).
+      db.onversionchange = () => {
+        db.close();
+        _dbPromise = null;
+      };
+      resolve(db);
+    };
     request.onupgradeneeded = (event) => {
       const db = (event.target as IDBOpenDBRequest).result;
       if (!db.objectStoreNames.contains(STORE_NAME)) {
@@ -263,8 +273,16 @@ export const initDB = (): Promise<IDBDatabase> => {
   });
 };
 
+// Memoize the open-DB promise so we don't run initDB() dozens of times per
+// minute (auto-save + cloud-sync each called it on every op previously).
+let _dbPromise: Promise<IDBDatabase> | null = null;
+const getDB = (): Promise<IDBDatabase> => {
+  if (!_dbPromise) _dbPromise = initDB();
+  return _dbPromise;
+};
+
 export const saveProjectToDB = async (project: any) => {
-  const db = await initDB();
+  const db = await getDB();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE_NAME, 'readwrite');
     const store = tx.objectStore(STORE_NAME);
@@ -275,7 +293,7 @@ export const saveProjectToDB = async (project: any) => {
 };
 
 export const deleteProjectFromDB = async (id: string) => {
-  const db = await initDB();
+  const db = await getDB();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE_NAME, 'readwrite');
     const store = tx.objectStore(STORE_NAME);
@@ -286,7 +304,7 @@ export const deleteProjectFromDB = async (id: string) => {
 };
 
 export const getAllProjectsFromDB = async (): Promise<any[]> => {
-  const db = await initDB();
+  const db = await getDB();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE_NAME, 'readonly');
     const store = tx.objectStore(STORE_NAME);
@@ -295,6 +313,7 @@ export const getAllProjectsFromDB = async (): Promise<any[]> => {
     request.onerror = () => reject(request.error);
   });
 };
+
 
 // Export all projects to a JSON file
 export const exportProjectsToFile = async () => {

@@ -10,6 +10,7 @@
  */
 
 import { fal } from '@fal-ai/client';
+import { blobToBase64, dataUrlToFile } from './imageUtils';
 
 // ============================================================
 // Types
@@ -109,16 +110,6 @@ export const modelAcceptsReference = (model: SeedanceModel): boolean => {
     return model === 'reference-to-video' || model === 'fast/reference-to-video';
 };
 
-// Helper to convert Blob to Base64
-const blobToBase64 = (blob: Blob): Promise<string> => {
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onloadend = () => resolve(reader.result as string);
-        reader.onerror = reject;
-        reader.readAsDataURL(blob);
-    });
-};
-
 // Helper to prepare image URL (fal SDK accepts data URIs)
 const prepareImageUrl = async (imageUrl: string): Promise<string> => {
     if (imageUrl.startsWith('http://') || imageUrl.startsWith('https://')) {
@@ -170,13 +161,8 @@ export const uploadImageToFalStorage = async (base64DataUrl: string, falApiKey: 
     const compressed = await compressImage(base64DataUrl);
     console.log(`Image compressed: ${Math.round(base64DataUrl.length / 1024)}KB → ${Math.round(compressed.length / 1024)}KB`);
 
-    // Convert data URL to File
-    const parts = compressed.split(',');
-    const mime = parts[0].match(/:(.*?);/)?.[1] || 'image/jpeg';
-    const bstr = atob(parts[1]);
-    const u8arr = new Uint8Array(bstr.length);
-    for (let i = 0; i < bstr.length; i++) u8arr[i] = bstr.charCodeAt(i);
-    const file = new File([u8arr], 'storyboard.jpg', { type: mime });
+    // Convert data URL to File (shared helper handles base64 decode + mime detection)
+    const file = dataUrlToFile(compressed, 'storyboard.jpg', 'image/jpeg');
 
     const url = await fal.storage.upload(file);
     console.log('Image uploaded to fal.ai storage:', url);

@@ -5,6 +5,7 @@
 
 import { fal } from '@fal-ai/client';
 import { VideoProviderSettings } from '../types';
+import { blobToBase64 } from './imageUtils';
 
 /**
  * Validate a fal.ai API key by checking its format
@@ -35,16 +36,6 @@ export const validateFalApiKey = async (apiKey: string): Promise<{ valid: boolea
     }
 
     return { valid: false, error: 'API key appears to be invalid format' };
-};
-
-// Helper to convert Blob to Base64
-const blobToBase64 = (blob: Blob): Promise<string> => {
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onloadend = () => resolve(reader.result as string);
-        reader.onerror = reject;
-        reader.readAsDataURL(blob);
-    });
 };
 
 // Helper to prepare image URL (fal SDK accepts data URIs)

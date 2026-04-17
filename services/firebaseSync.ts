@@ -30,22 +30,11 @@ import { db, storage } from './firebase';
 import { getCurrentUser } from './firebaseAuth';
 import { saveProjectToDB } from './storage';
 import { Project } from '../types';
+import { dataUrlToBlob } from './imageUtils';
 
 // ============================================================
 // Image Upload Helpers
 // ============================================================
-
-/**
- * Convert a base64 data URL to a Blob for upload.
- */
-const dataUrlToBlob = (dataUrl: string): Blob => {
-    const parts = dataUrl.split(',');
-    const mime = parts[0].match(/:(.*?);/)?.[1] || 'image/png';
-    const bstr = atob(parts[1]);
-    const u8arr = new Uint8Array(bstr.length);
-    for (let i = 0; i < bstr.length; i++) u8arr[i] = bstr.charCodeAt(i);
-    return new Blob([u8arr], { type: mime });
-};
 
 /**
  * Upload a single base64 image to Firebase Storage.
@@ -72,7 +61,9 @@ const uploadBase64Image = async (
  * Returns a deep clone with all images as URLs.
  */
 const uploadProjectImages = async (uid: string, project: Project): Promise<Project> => {
-    const p = JSON.parse(JSON.stringify(project)) as Project; // deep clone
+    // structuredClone is ~2-3x faster than JSON.parse(JSON.stringify(...)) for
+    // large base64-heavy projects and handles all JSON-serializable shapes correctly.
+    const p = structuredClone(project) as Project;
     const uploads: Promise<void>[] = [];
 
     // Helper: if value is base64, schedule an upload and return a setter
@@ -320,14 +311,24 @@ export const scheduleCloudSync = (project: Project): void => {
 
 /**
  * Force-sync all projects to cloud immediately (e.g. on first login migration).
+ * Runs with a small concurrency limit so Firestore/Storage isn't flooded while
+ * still being meaningfully faster than a purely serial loop.
  */
 export const syncAllProjectsToCloud = async (projects: Project[]): Promise<void> => {
     const user = getCurrentUser();
     if (!user) return;
 
     console.log(`☁️ Syncing ${projects.length} projects to cloud...`);
-    for (const project of projects) {
-        await saveProjectToCloud(project);
-    }
+
+    const CONCURRENCY = 3;
+    const queue = [...projects];
+    const workers = Array.from({ length: Math.min(CONCURRENCY, queue.length) }, async () => {
+        while (queue.length > 0) {
+            const next = queue.shift();
+            if (next) await saveProjectToCloud(next);
+        }
+    });
+    await Promise.all(workers);
+
     console.log('✅ All projects synced to cloud');
 };
