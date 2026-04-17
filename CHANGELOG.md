@@ -5,7 +5,7 @@ All notable changes to Slop Board Pro are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to semantic versioning where practical.
 
-## [Unreleased]
+## [1.4.5] — 2026-04-17
 
 ### Changed — Tier 1 efficiency pass (behaviour-preserving)
 
