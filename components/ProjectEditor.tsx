@@ -7,7 +7,7 @@ import { ShotCard } from './ShotCard';
 import { AssetCard } from './AssetCard';
 import { Button } from './Button';
 import { ShotDetailModal } from './ShotDetailModal';
-import { VideoShotCard, WanGenerationSettings } from './VideoShotCard';
+import { VideoShotCard, WanGenerationSettings, ProjectVideoRef } from './VideoShotCard';
 import { generateWanVideo, generateAuroraVideo, validateFalApiKey, AuroraGenerationSettings, uploadFileToFal } from '../services/falService';
 import { generateSeedanceVideo, SeedanceGenerationSettings, uploadImageToFalStorage } from '../services/seedanceService';
 import { MotionControl } from './MotionControl';
@@ -2301,33 +2301,91 @@ TIP: Select (highlight) a portion of text and click 'Analyze Scene' to analyze o
             </div>
           )}
 
-          {activeTab === 'video' && (
-            <div className="animate-fade-in space-y-8 pb-20">
-              <div className="flex flex-col gap-12">
-                {currentShots.map(shot => (
-                  <VideoShotCard
-                    key={shot.id}
-                    shot={shot}
-                    projectTitle={project.title}
-                    sceneName={activeScene?.name}
-                    videoModelLabel={`Veo ${shot.videoModel === 'quality' ? 'Quality' : 'Fast'} Model`}
-                    projectVideoSettings={project.videoSettings}
-                    onUpdatePrompt={handleUpdateVideoPrompt}
-                    onGenerate={handleGenerateVideo}
-                    onGenerateWan={handleGenerateWanVideo}
-                    onGenerateAurora={handleGenerateAuroraVideo}
-                    onGenerateSeedance={handleGenerateSeedanceVideo}
-                    onExtendSeedance={handleExtendSeedanceVideo}
-                    onExtend={handleExtendVideo}
-                    onDownload={handleDownloadVideo}
-                    onCaptureFrame={handleCaptureFrame}
-                    onDeleteSegment={handleDeleteVideoSegment}
-                    synthesizePrompt={synthesizeVideoPrompt}
-                  />
-                ))}
+          {activeTab === 'video' && (() => {
+            // Flatten every generated video in the project into a picker-friendly
+            // list so shots can reference videos from other shots as Seedance
+            // reference-to-video inputs (`video_urls`).
+            const allProjectVideos: ProjectVideoRef[] = [];
+            (project.scenes || []).forEach(scene => {
+              (scene.shots || []).forEach(s => {
+                const segs = s.videoSegments || [];
+                if (segs.length > 0) {
+                  segs.forEach((seg, i) => {
+                    if (!seg.url) return;
+                    allProjectVideos.push({
+                      key: `${s.id}:${seg.id}`,
+                      url: seg.url,
+                      label: `Shot ${s.number}`,
+                      sceneName: scene.name,
+                      sublabel: seg.isExtension
+                        ? `Extension ${i} · ${seg.model}`
+                        : `Segment ${i + 1} · ${seg.model}`,
+                    });
+                  });
+                } else if (s.videoUrl) {
+                  // Legacy shots without a segments array
+                  allProjectVideos.push({
+                    key: `${s.id}:main`,
+                    url: s.videoUrl,
+                    label: `Shot ${s.number}`,
+                    sceneName: scene.name,
+                  });
+                }
+              });
+            });
+            // Also include legacy top-level shots if present
+            (project.shots || []).forEach(s => {
+              const segs = s.videoSegments || [];
+              if (segs.length > 0) {
+                segs.forEach((seg, i) => {
+                  if (!seg.url) return;
+                  allProjectVideos.push({
+                    key: `${s.id}:${seg.id}`,
+                    url: seg.url,
+                    label: `Shot ${s.number}`,
+                    sublabel: seg.isExtension
+                      ? `Extension ${i} · ${seg.model}`
+                      : `Segment ${i + 1} · ${seg.model}`,
+                  });
+                });
+              } else if (s.videoUrl) {
+                allProjectVideos.push({
+                  key: `${s.id}:main`,
+                  url: s.videoUrl,
+                  label: `Shot ${s.number}`,
+                });
+              }
+            });
+
+            return (
+              <div className="animate-fade-in space-y-8 pb-20">
+                <div className="flex flex-col gap-12">
+                  {currentShots.map(shot => (
+                    <VideoShotCard
+                      key={shot.id}
+                      shot={shot}
+                      projectTitle={project.title}
+                      sceneName={activeScene?.name}
+                      videoModelLabel={`Veo ${shot.videoModel === 'quality' ? 'Quality' : 'Fast'} Model`}
+                      projectVideoSettings={project.videoSettings}
+                      onUpdatePrompt={handleUpdateVideoPrompt}
+                      onGenerate={handleGenerateVideo}
+                      onGenerateWan={handleGenerateWanVideo}
+                      onGenerateAurora={handleGenerateAuroraVideo}
+                      onGenerateSeedance={handleGenerateSeedanceVideo}
+                      onExtendSeedance={handleExtendSeedanceVideo}
+                      onExtend={handleExtendVideo}
+                      onDownload={handleDownloadVideo}
+                      onCaptureFrame={handleCaptureFrame}
+                      onDeleteSegment={handleDeleteVideoSegment}
+                      synthesizePrompt={synthesizeVideoPrompt}
+                      projectVideos={allProjectVideos}
+                    />
+                  ))}
+                </div>
               </div>
-            </div>
-          )}
+            );
+          })()}
 
           {activeTab === 'motion' && (
             <MotionControl project={project} />

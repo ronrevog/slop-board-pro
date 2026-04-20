@@ -10,7 +10,7 @@
  */
 
 import { fal } from '@fal-ai/client';
-import { blobToBase64, dataUrlToFile } from './imageUtils';
+import { blobToBase64, dataUrlToBlob, dataUrlToFile } from './imageUtils';
 
 // ============================================================
 // Types
@@ -37,9 +37,22 @@ export interface SeedanceGenerationSettings {
     seed?: number;
     negativePrompt?: string;
     enableSafetyChecker?: boolean;
-    /** For reference-to-video: URL(s) of reference images */
+    /** For reference-to-video: URL(s) of reference images (legacy singular) */
     referenceImageUrl?: string;
+    /** For reference-to-video: URL(s) of reference images (legacy plural) */
     referenceImages?: string[];
+    /**
+     * For reference-to-video: canonical list of image reference URLs.
+     * Sent to fal.ai as `image_urls`. Accepts either https URLs or data/blob URLs
+     * (data/blob URLs are uploaded to fal.ai storage automatically).
+     */
+    referenceImageUrls?: string[];
+    /**
+     * For reference-to-video: list of video reference URLs.
+     * Sent to fal.ai as `video_urls`. Accepts either https URLs or data/blob URLs
+     * (data/blob URLs are uploaded to fal.ai storage automatically).
+     */
+    referenceVideoUrls?: string[];
 }
 
 /** Common input fields shared across all Seedance 2.0 endpoints */
@@ -169,6 +182,51 @@ export const uploadImageToFalStorage = async (base64DataUrl: string, falApiKey: 
     return url;
 };
 
+/**
+ * Upload an arbitrary media URL (image or video) to fal.ai storage if needed so
+ * it can be referenced by a public https:// URL. Handles:
+ *   - `http(s)://...` → returned as-is
+ *   - `data:<mime>;base64,...` → decoded and uploaded
+ *   - `blob:...` → fetched and uploaded
+ *
+ * Unlike `uploadImageToFalStorage`, this helper does NOT compress — it's intended
+ * for videos and other media where we want to preserve the original bytes.
+ */
+export const uploadMediaToFalStorage = async (
+    url: string,
+    falApiKey: string,
+    fileBaseName: string = 'media'
+): Promise<string> => {
+    if (!url) throw new Error('uploadMediaToFalStorage: url is required');
+    if (url.startsWith('http://') || url.startsWith('https://')) return url;
+
+    const cleanKey = falApiKey.trim().replace(/^Key\s+/i, '');
+    fal.config({ credentials: cleanKey });
+
+    let blob: Blob;
+    if (url.startsWith('data:')) {
+        blob = dataUrlToBlob(url, 'application/octet-stream');
+    } else if (url.startsWith('blob:')) {
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`Failed to fetch blob URL: HTTP ${res.status}`);
+        blob = await res.blob();
+    } else {
+        throw new Error(`Unsupported URL scheme for upload: ${url.substring(0, 32)}...`);
+    }
+
+    const mime = blob.type || 'application/octet-stream';
+    const ext = mime.startsWith('video/') ? 'mp4'
+        : mime.startsWith('image/') ? (mime.split('/')[1] || 'jpg')
+            : mime.startsWith('audio/') ? (mime.split('/')[1] || 'mp3')
+                : 'bin';
+    const file = new File([blob], `${fileBaseName}.${ext}`, { type: mime });
+
+    console.log(`Uploading ${mime} (${Math.round(blob.size / 1024)}KB) to fal.ai storage...`);
+    const uploaded = await fal.storage.upload(file);
+    console.log('Media uploaded to fal.ai storage:', uploaded);
+    return uploaded;
+};
+
 // ============================================================
 // Main Generation Function
 // ============================================================
@@ -247,17 +305,55 @@ export const generateSeedanceVideo = async (
             input.image_url = imageUrl;
         }
     } else if (modelAcceptsReference(settings.model)) {
-        // reference-to-video: only pass reference_image_url (not image_url — that
-        // field is specific to the image-to-video endpoint and causes a 422 here)
-        if (imageUrl) {
-            let uploadedUrl = imageUrl;
-            if (imageUrl.startsWith('data:')) {
-                uploadedUrl = await uploadImageToFalStorage(imageUrl, falApiKey);
-            }
-            input.reference_image_url = uploadedUrl;
+        // reference-to-video / fast/reference-to-video:
+        // Current fal.ai schema accepts `image_urls` (list) and `video_urls` (list).
+        // We collect image refs from every legacy + new source into one list, and
+        // upload any local (data:/blob:) references to fal.ai storage so the API
+        // gets public URLs.
+
+        // ---- Image references ----
+        const rawImageRefs: string[] = [];
+        if (imageUrl) rawImageRefs.push(imageUrl);                              // legacy param
+        if (settings.referenceImageUrl) rawImageRefs.push(settings.referenceImageUrl); // legacy singular
+        if (settings.referenceImages?.length) rawImageRefs.push(...settings.referenceImages); // legacy plural
+        if (settings.referenceImageUrls?.length) rawImageRefs.push(...settings.referenceImageUrls); // new canonical
+
+        // Dedupe while preserving order
+        const uniqueImageRefs = Array.from(new Set(rawImageRefs.filter(Boolean)));
+
+        if (uniqueImageRefs.length > 0) {
+            onProgress?.(`Preparing ${uniqueImageRefs.length} image reference(s)...`);
+            const uploadedImageUrls = await Promise.all(
+                uniqueImageRefs.map((u, i) =>
+                    u.startsWith('data:') || u.startsWith('blob:')
+                        ? uploadImageToFalStorage(u, falApiKey).catch(err => {
+                            console.warn(`Failed to upload image ref #${i}, dropping:`, err);
+                            return null;
+                        })
+                        : Promise.resolve(u)
+                )
+            );
+            input.image_urls = uploadedImageUrls.filter((u): u is string => !!u);
         }
-        if (settings.referenceImages && settings.referenceImages.length > 0) {
-            input.reference_images = settings.referenceImages;
+
+        // ---- Video references ----
+        const rawVideoRefs: string[] = settings.referenceVideoUrls?.filter(Boolean) ?? [];
+        const uniqueVideoRefs = Array.from(new Set(rawVideoRefs));
+
+        if (uniqueVideoRefs.length > 0) {
+            onProgress?.(`Preparing ${uniqueVideoRefs.length} video reference(s)...`);
+            const uploadedVideoUrls = await Promise.all(
+                uniqueVideoRefs.map((u, i) =>
+                    uploadMediaToFalStorage(u, falApiKey, `ref_video_${i}`).catch(err => {
+                        console.warn(`Failed to upload video ref #${i}, dropping:`, err);
+                        return null;
+                    })
+                )
+            );
+            const finalVideoUrls = uploadedVideoUrls.filter((u): u is string => !!u);
+            if (finalVideoUrls.length > 0) {
+                input.video_urls = finalVideoUrls;
+            }
         }
     }
     // text-to-video models don't need any image input

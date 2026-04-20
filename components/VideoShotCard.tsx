@@ -1,11 +1,26 @@
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useMemo } from 'react';
 import { Shot, VideoSegment, VideoProviderSettings, DEFAULT_VIDEO_SETTINGS } from '../types';
 import { AuroraGenerationSettings, uploadFileToFal } from '../services/falService';
 import { SeedanceGenerationSettings, SEEDANCE_MODELS, SEEDANCE_DURATIONS, SEEDANCE_ASPECT_RATIOS, SEEDANCE_RESOLUTIONS, modelRequiresImage, modelAcceptsReference } from '../services/seedanceService';
 import { Button } from './Button';
 import { Download, Loader2, Clapperboard, Video, ImageIcon, MonitorPlay, RefreshCw, Film, Play, AlertTriangle, X, Camera, Settings, ChevronDown, ChevronUp, CheckSquare, Square, Music, Upload, Mic, StopCircle, Trash2, Archive } from 'lucide-react';
 import JSZip from 'jszip';
+
+/** A single video that can be picked as a Seedance reference. Flattened from
+ *  all shots / segments across the project. */
+export interface ProjectVideoRef {
+  /** Stable ID to key selection state — prefer `${shotId}:${segmentId ?? 'main'}` */
+  key: string;
+  /** Actual video URL (https, data:, or blob:). May get uploaded to fal.ai at send time. */
+  url: string;
+  /** Short label for the UI card (e.g. "Shot 3") */
+  label: string;
+  /** Optional scene name to group / caption */
+  sceneName?: string;
+  /** Optional extra caption (e.g. "Extension 2", "5s quality") */
+  sublabel?: string;
+}
 
 export interface WanGenerationSettings {
   resolution: '720p' | '1080p';
@@ -35,6 +50,12 @@ interface VideoShotCardProps {
   onCaptureFrame: (id: string, imageDataUrl: string) => void;
   onDeleteSegment: (shotId: string, segmentId: string) => void;
   synthesizePrompt: (shot: Shot) => string;
+  /**
+   * Flat list of every video in the project (excluding this shot's own videos).
+   * Used as the picker source for Seedance reference-to-video generations.
+   * If not provided, the picker section is simply hidden.
+   */
+  projectVideos?: ProjectVideoRef[];
 }
 
 export const VideoShotCard: React.FC<VideoShotCardProps> = ({
@@ -53,7 +74,8 @@ export const VideoShotCard: React.FC<VideoShotCardProps> = ({
   onDownload,
   onCaptureFrame,
   onDeleteSegment,
-  synthesizePrompt
+  synthesizePrompt,
+  projectVideos
 }) => {
   // State is now safe here because this is a separate component instance
   const [viewMode, setViewMode] = useState<'image' | 'video'>(shot.videoUrl ? 'video' : 'image');
@@ -176,6 +198,33 @@ export const VideoShotCard: React.FC<VideoShotCardProps> = ({
 
   // Show/hide Seedance settings panel
   const [showSeedanceSettings, setShowSeedanceSettings] = useState(false);
+
+  // Seedance reference-video picker state ------------------------------------
+  // Show/hide the picker (open by default when there's something to pick)
+  const [showSeedanceRefVideos, setShowSeedanceRefVideos] = useState(true);
+  // Keys (ProjectVideoRef.key) of currently selected reference videos
+  const [selectedRefVideoKeys, setSelectedRefVideoKeys] = useState<Set<string>>(new Set());
+
+  // Exclude the current shot's videos from the picker — you can't reference yourself.
+  const availableRefVideos = useMemo<ProjectVideoRef[]>(() => {
+    if (!projectVideos) return [];
+    return projectVideos.filter(v => !v.key.startsWith(`${shot.id}:`));
+  }, [projectVideos, shot.id]);
+
+  const toggleRefVideo = (key: string) => {
+    setSelectedRefVideoKeys(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  };
+
+  const clearRefVideos = () => setSelectedRefVideoKeys(new Set());
+
+  // Resolve selected keys → URLs whenever we actually call the generator
+  const getSelectedRefVideoUrls = (): string[] =>
+    availableRefVideos.filter(v => selectedRefVideoKeys.has(v.key)).map(v => v.url);
+
 
   // Aurora settings state (initialized from project settings)
   const [auroraSettings, setAuroraSettings] = useState<AuroraGenerationSettings>({
@@ -1062,10 +1111,116 @@ export const VideoShotCard: React.FC<VideoShotCardProps> = ({
                   </div>
                 )}
 
+                {/* ────────────────────────────────────────────────────────── */}
+                {/* Reference Videos Picker                                   */}
+                {/* Only visible for reference-to-video models — these are    */}
+                {/* the only endpoints that accept `video_urls`.              */}
+                {/* ────────────────────────────────────────────────────────── */}
+                {modelAcceptsReference(seedanceSettings.model) && availableRefVideos.length > 0 && (
+                  <div className="space-y-2 animate-fade-in">
+                    <button
+                      onClick={() => setShowSeedanceRefVideos(!showSeedanceRefVideos)}
+                      className="w-full flex items-center justify-between px-3 py-2 bg-emerald-900/10 border border-emerald-900/40 rounded-lg text-sm text-emerald-300 hover:bg-emerald-900/20 transition-colors"
+                    >
+                      <span className="flex items-center gap-2">
+                        <Film className="w-3 h-3" />
+                        Reference Videos
+                        <span className="text-[10px] bg-emerald-900/40 text-emerald-300 px-1.5 py-0.5 rounded-full">
+                          {selectedRefVideoKeys.size} / {availableRefVideos.length}
+                        </span>
+                      </span>
+                      {showSeedanceRefVideos ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                    </button>
+
+                    {showSeedanceRefVideos && (
+                      <div className="bg-neutral-800/30 border border-neutral-700 rounded-lg p-3 space-y-2 animate-fade-in">
+                        <div className="flex items-center justify-between">
+                          <p className="text-[10px] text-neutral-500 uppercase tracking-wider">
+                            Select videos to use as motion / style reference
+                          </p>
+                          {selectedRefVideoKeys.size > 0 && (
+                            <button
+                              onClick={clearRefVideos}
+                              className="text-[10px] text-neutral-400 hover:text-white flex items-center gap-1 bg-neutral-800 hover:bg-neutral-700 px-2 py-0.5 rounded transition-colors"
+                            >
+                              <X className="w-3 h-3" /> Clear
+                            </button>
+                          )}
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-2 max-h-72 overflow-y-auto custom-scrollbar pr-1">
+                          {availableRefVideos.map(v => {
+                            const isSelected = selectedRefVideoKeys.has(v.key);
+                            return (
+                              <button
+                                key={v.key}
+                                onClick={() => toggleRefVideo(v.key)}
+                                className={`relative text-left rounded-lg overflow-hidden border-2 transition-all group ${isSelected
+                                  ? 'border-emerald-500 ring-2 ring-emerald-500/30'
+                                  : 'border-neutral-700 hover:border-neutral-500'
+                                  }`}
+                                title={`${v.sceneName ? v.sceneName + ' • ' : ''}${v.label}${v.sublabel ? ' — ' + v.sublabel : ''}`}
+                              >
+                                <div className="aspect-video bg-neutral-900">
+                                  <video
+                                    src={v.url}
+                                    className="w-full h-full object-cover"
+                                    muted
+                                    preload="metadata"
+                                  />
+                                </div>
+                                {/* Selection indicator */}
+                                <div className={`absolute top-1 right-1 w-5 h-5 rounded-full flex items-center justify-center ${isSelected ? 'bg-emerald-500' : 'bg-black/60 border border-neutral-600'
+                                  }`}>
+                                  {isSelected ? (
+                                    <CheckSquare className="w-3 h-3 text-black" />
+                                  ) : (
+                                    <Square className="w-3 h-3 text-neutral-400" />
+                                  )}
+                                </div>
+                                {/* Label overlay */}
+                                <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/90 to-transparent px-2 py-1">
+                                  <p className="text-[10px] text-white font-medium truncate">{v.label}</p>
+                                  {(v.sceneName || v.sublabel) && (
+                                    <p className="text-[9px] text-neutral-400 truncate">
+                                      {v.sceneName}
+                                      {v.sceneName && v.sublabel ? ' • ' : ''}
+                                      {v.sublabel}
+                                    </p>
+                                  )}
+                                </div>
+                              </button>
+                            );
+                          })}
+                        </div>
+
+                        {selectedRefVideoKeys.size > 0 && (
+                          <p className="text-[9px] text-emerald-400/80 bg-emerald-900/10 border border-emerald-900/30 rounded px-2 py-1">
+                            ℹ️ {selectedRefVideoKeys.size} video{selectedRefVideoKeys.size === 1 ? '' : 's'} will be uploaded to fal.ai as <code>video_urls</code>. Local (data:/blob:) URLs are uploaded automatically at generation time.
+                          </p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Hint when videos are selected but model doesn't accept them */}
+                {!modelAcceptsReference(seedanceSettings.model) && selectedRefVideoKeys.size > 0 && (
+                  <div className="text-xs text-yellow-400 bg-yellow-900/20 border border-yellow-900/30 rounded px-2 py-1">
+                    ⚠️ {selectedRefVideoKeys.size} reference video{selectedRefVideoKeys.size === 1 ? '' : 's'} selected — switch model to <strong>Reference → Video</strong> to use them.
+                  </div>
+                )}
+
                 {/* Generate Button */}
                 <Button
                   variant="primary"
-                  onClick={() => onGenerateSeedance(shot.id, seedanceSettings)}
+                  onClick={() => onGenerateSeedance(shot.id, {
+                    ...seedanceSettings,
+                    // Only pass video refs when the selected model accepts them.
+                    referenceVideoUrls: modelAcceptsReference(seedanceSettings.model)
+                      ? getSelectedRefVideoUrls()
+                      : undefined,
+                  })}
                   disabled={shot.isVideoGenerating || shot.isExtending || !projectVideoSettings?.falApiKey || (modelRequiresImage(seedanceSettings.model) && !shot.imageUrl)}
                   className="w-full h-12 bg-emerald-600 hover:bg-emerald-700"
                 >

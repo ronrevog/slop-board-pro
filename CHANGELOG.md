@@ -5,6 +5,33 @@ All notable changes to Slop Board Pro are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to semantic versioning where practical.
 
+## [1.4.6] — 2026-04-20
+
+### Added — Seedance Reference Videos
+
+- **Reference Video picker** for Seedance 2.0 `reference-to-video` and
+  `fast/reference-to-video` models. When either of those models is selected in
+  the Seedance provider panel, a new collapsible section lists every video
+  already generated elsewhere in the project (across all scenes/shots/segments),
+  and you can tick any number of them as motion/style references for the new
+  generation.
+- Selected videos are sent to fal.ai as `video_urls` (list). `data:` and
+  `blob:` URLs are automatically uploaded to fal.ai storage at generation time
+  via the new `uploadMediaToFalStorage` helper (no image compression — videos
+  preserve their bytes), and `https://` URLs are passed through unchanged.
+- Picker excludes the current shot's own videos (no self-reference) and shows
+  a hint if videos are selected while the model doesn't support them.
+
+### Changed
+
+- `services/seedanceService.ts` — `SeedanceGenerationSettings` now carries
+  `referenceImageUrls?: string[]` and `referenceVideoUrls?: string[]`. Legacy
+  `referenceImageUrl` / `referenceImages` still accepted for backward-compat;
+  they're merged at send-time into the current `image_urls` list.
+- `generateSeedanceVideo` reference-to-video path now sends `image_urls` and
+  `video_urls` (plural lists) matching the current fal.ai schema. Image
+  references are deduplicated and uploaded in parallel.
+
 ## [1.4.5] — 2026-04-17
 
 ### Changed — Tier 1 efficiency pass (behaviour-preserving)
