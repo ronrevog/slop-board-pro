@@ -1195,9 +1195,19 @@ export const VideoShotCard: React.FC<VideoShotCardProps> = ({
                         </div>
 
                         {selectedRefVideoKeys.size > 0 && (
-                          <p className="text-[9px] text-emerald-400/80 bg-emerald-900/10 border border-emerald-900/30 rounded px-2 py-1">
-                            ℹ️ {selectedRefVideoKeys.size} video{selectedRefVideoKeys.size === 1 ? '' : 's'} will be uploaded to fal.ai as <code>video_urls</code>. Local (data:/blob:) URLs are uploaded automatically at generation time.
-                          </p>
+                          <div className="space-y-1">
+                            <p className="text-[9px] text-emerald-400/80 bg-emerald-900/10 border border-emerald-900/30 rounded px-2 py-1">
+                              ℹ️ Generation will route through <strong>PiAPI Seedance 2</strong> (<code>omni_reference</code>) because video references were selected. Add a PiAPI key in Settings.
+                            </p>
+                            {!projectVideoSettings?.piapiApiKey && (
+                              <p className="text-[9px] text-yellow-400 bg-yellow-900/20 border border-yellow-900/30 rounded px-2 py-1">
+                                ⚠️ PiAPI key missing — generation will fail until you add one in Project Settings.
+                              </p>
+                            )}
+                            <p className="text-[9px] text-neutral-500">
+                              Selected videos are uploaded to PiAPI ephemeral storage at generation time. PiAPI currently accepts up to 1 video ref + up to 11 image refs (12 total).
+                            </p>
+                          </div>
                         )}
                       </div>
                     )}
@@ -1211,23 +1221,35 @@ export const VideoShotCard: React.FC<VideoShotCardProps> = ({
                   </div>
                 )}
 
-                {/* Generate Button */}
-                <Button
-                  variant="primary"
-                  onClick={() => onGenerateSeedance(shot.id, {
-                    ...seedanceSettings,
-                    // Only pass video refs when the selected model accepts them.
-                    referenceVideoUrls: modelAcceptsReference(seedanceSettings.model)
-                      ? getSelectedRefVideoUrls()
-                      : undefined,
-                  })}
-                  disabled={shot.isVideoGenerating || shot.isExtending || !projectVideoSettings?.falApiKey || (modelRequiresImage(seedanceSettings.model) && !shot.imageUrl)}
-                  className="w-full h-12 bg-emerald-600 hover:bg-emerald-700"
-                >
-                  {shot.videoUrl
-                    ? `Regen Seedance (${seedanceSettings.duration}s)`
-                    : `Generate Seedance (${seedanceSettings.duration}s)`}
-                </Button>
+                {/* Generate Button — when video refs are selected we route
+                    through PiAPI (omni_reference), otherwise fal.ai. The
+                    required API key depends on the path. */}
+                {(() => {
+                  const routingPiAPI =
+                    modelAcceptsReference(seedanceSettings.model) &&
+                    selectedRefVideoKeys.size > 0;
+                  const missingKey = routingPiAPI
+                    ? !projectVideoSettings?.piapiApiKey
+                    : !projectVideoSettings?.falApiKey;
+                  return (
+                    <Button
+                      variant="primary"
+                      onClick={() => onGenerateSeedance(shot.id, {
+                        ...seedanceSettings,
+                        // Only pass video refs when the selected model accepts them.
+                        referenceVideoUrls: modelAcceptsReference(seedanceSettings.model)
+                          ? getSelectedRefVideoUrls()
+                          : undefined,
+                      })}
+                      disabled={shot.isVideoGenerating || shot.isExtending || missingKey || (modelRequiresImage(seedanceSettings.model) && !shot.imageUrl)}
+                      className="w-full h-12 bg-emerald-600 hover:bg-emerald-700"
+                    >
+                      {shot.videoUrl
+                        ? `Regen Seedance${routingPiAPI ? ' (PiAPI)' : ''} (${seedanceSettings.duration}s)`
+                        : `Generate Seedance${routingPiAPI ? ' (PiAPI)' : ''} (${seedanceSettings.duration}s)`}
+                    </Button>
+                  );
+                })()}
               </div>
             )}
 

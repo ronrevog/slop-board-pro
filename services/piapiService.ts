@@ -1,0 +1,344 @@
+/**
+ * PiAPI Service — Seedance 2 via https://api.piapi.ai
+ *
+ * Why: fal.ai Seedance's reference-to-video endpoint is great for image refs,
+ * but for *video* references we route through PiAPI's Seedance 2 `omni_reference`
+ * mode instead (user preference). This service handles:
+ *
+ *   1. Uploading local (data:/blob:) media to PiAPI's ephemeral resource store
+ *      → returns a public https:// URL.
+ *   2. Submitting a Seedance 2 task and polling until completion.
+ *
+ * All calls go directly from the browser. If you hit CORS, add a server-side
+ * proxy (see `api/piapi-api.ts` / `api/piapi-upload.ts` scaffolding for Vercel).
+ */
+
+import { blobToBase64, dataUrlToBlob, stripBase64Header } from './imageUtils';
+
+// ============================================================
+// Constants / endpoints
+// ============================================================
+
+const PIAPI_TASK_URL = 'https://api.piapi.ai/api/v1/task';
+const PIAPI_UPLOAD_URL = 'https://upload.theapi.app/api/ephemeral_resource';
+
+// PiAPI's ephemeral upload tops out at 10 MB per file.
+const PIAPI_UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
+
+// ============================================================
+// Types
+// ============================================================
+
+export type PiAPISeedanceTaskType = 'seedance-2' | 'seedance-2-fast';
+
+export type PiAPISeedanceMode = 'text_to_video' | 'first_last_frames' | 'omni_reference';
+
+export type PiAPISeedanceAspectRatio =
+    | '21:9'
+    | '16:9'
+    | '4:3'
+    | '1:1'
+    | '3:4'
+    | '9:16'
+    | 'auto';
+
+export type PiAPISeedanceResolution = '480p' | '720p' | '1080p';
+
+/** Request body shape for POST /api/v1/task */
+export interface PiAPISeedanceInput {
+    prompt: string;
+    mode: PiAPISeedanceMode;
+    duration?: number; // 4-15
+    aspect_ratio?: PiAPISeedanceAspectRatio;
+    resolution?: PiAPISeedanceResolution;
+    image_urls?: string[];
+    video_urls?: string[];
+    audio_urls?: string[];
+}
+
+/** Response shape for POST /api/v1/task (and GET task by id during polling) */
+interface PiAPITaskResponse {
+    code: number;
+    data?: {
+        task_id: string;
+        status: 'Pending' | 'Staged' | 'Processing' | 'Completed' | 'Failed' | string;
+        output?: { video?: string };
+        error?: { code?: number; message?: string };
+    };
+    message?: string;
+}
+
+/** Response shape for POST /api/ephemeral_resource */
+interface PiAPIUploadResponse {
+    code: number;
+    data?: { url: string };
+    message?: string;
+}
+
+// ============================================================
+// Upload helpers
+// ============================================================
+
+/**
+ * Upload a file to PiAPI's ephemeral resource store.
+ * Accepts `data:`, `blob:`, or `http(s)://` URLs — http(s) URLs are returned
+ * as-is (assumed publicly accessible). Everything else is base64-uploaded.
+ *
+ * @throws if the payload exceeds 10 MB or upload fails.
+ */
+export const uploadPiAPIEphemeral = async (
+    url: string,
+    apiKey: string,
+    fileName: string = 'upload'
+): Promise<string> => {
+    if (!apiKey) throw new Error('PiAPI API key is required for uploads.');
+    if (!url) throw new Error('uploadPiAPIEphemeral: url is required');
+
+    // Already public? Pass through.
+    if (url.startsWith('http://') || url.startsWith('https://')) return url;
+
+    // Resolve to a Blob
+    let blob: Blob;
+    if (url.startsWith('data:')) {
+        blob = dataUrlToBlob(url, 'application/octet-stream');
+    } else if (url.startsWith('blob:')) {
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`Failed to fetch blob URL: HTTP ${res.status}`);
+        blob = await res.blob();
+    } else {
+        throw new Error(`Unsupported URL scheme for PiAPI upload: ${url.substring(0, 32)}...`);
+    }
+
+    if (blob.size > PIAPI_UPLOAD_MAX_BYTES) {
+        throw new Error(
+            `File too large for PiAPI ephemeral upload: ${Math.round(blob.size / 1024 / 1024)}MB > 10MB limit.`
+        );
+    }
+
+    // Give it a sensible extension based on mime (so PiAPI / Seedance know the type).
+    const mime = blob.type || 'application/octet-stream';
+    const extFromMime =
+        mime.startsWith('video/') ? (mime.split('/')[1] || 'mp4')
+            : mime.startsWith('image/') ? (mime.split('/')[1] || 'png')
+                : mime.startsWith('audio/') ? (mime.split('/')[1] || 'mp3')
+                    : 'bin';
+    const finalFileName = fileName.includes('.') ? fileName : `${fileName}.${extFromMime}`;
+
+    // Convert Blob → base64 (strip the `data:...;base64,` prefix — PiAPI wants raw b64).
+    const dataUrl = await blobToBase64(blob);
+    const base64 = stripBase64Header(dataUrl);
+
+    console.log(`[PiAPI] Uploading ${finalFileName} (${Math.round(blob.size / 1024)}KB, ${mime})...`);
+
+    const res = await fetch(PIAPI_UPLOAD_URL, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': apiKey.trim(),
+        },
+        body: JSON.stringify({ file_name: finalFileName, file_data: base64 }),
+    });
+
+    if (!res.ok) {
+        const txt = await res.text().catch(() => '');
+        throw new Error(`PiAPI upload failed: HTTP ${res.status} ${txt.substring(0, 200)}`);
+    }
+
+    const body = (await res.json()) as PiAPIUploadResponse;
+    if (body.code !== 200 || !body.data?.url) {
+        throw new Error(`PiAPI upload failed: ${body.message || 'unknown error'}`);
+    }
+    console.log(`[PiAPI] Uploaded → ${body.data.url}`);
+    return body.data.url;
+};
+
+// ============================================================
+// Seedance 2 omni_reference generation
+// ============================================================
+
+export interface PiAPISeedance2OmniSettings {
+    /** Task type: controls quality vs cost */
+    taskType: PiAPISeedanceTaskType;
+    /** Text prompt (up to 4000 chars) */
+    prompt: string;
+    /** Integer seconds 4-15 (default 5) */
+    duration?: number;
+    /** Omni mode does NOT accept 'auto' — pick a real ratio */
+    aspectRatio?: Exclude<PiAPISeedanceAspectRatio, 'auto'>;
+    /** Resolution — note fast variant caps at 720p per pricing docs */
+    resolution?: PiAPISeedanceResolution;
+    /** Reference image URLs (public https only). 0-12. */
+    imageUrls?: string[];
+    /**
+     * Reference video URLs (public https only). PiAPI currently accepts **1**
+     * video URL in omni_reference mode.
+     */
+    videoUrls?: string[];
+    /** Reference audio URLs (mp3/wav, ≤15 s). 0+. */
+    audioUrls?: string[];
+}
+
+/** Clamp duration into the API's 4-15 integer range. */
+const clampDuration = (v: unknown): number | undefined => {
+    if (v === undefined || v === null) return undefined;
+    const n = typeof v === 'number' ? v : parseInt(String(v), 10);
+    if (!Number.isFinite(n)) return undefined;
+    return Math.min(15, Math.max(4, Math.round(n)));
+};
+
+/**
+ * Submit a Seedance 2 omni_reference task and poll until completion.
+ * Returns the generated video as a base64 data URL (same contract as the fal.ai
+ * service) so the rest of the app doesn't have to care where it came from.
+ *
+ * Falls back to the raw hosted https URL if downloading the video bytes fails
+ * due to CORS.
+ */
+export const generatePiAPISeedance2Omni = async (
+    settings: PiAPISeedance2OmniSettings,
+    apiKey: string,
+    onProgress?: (status: string, position?: number) => void
+): Promise<string> => {
+    if (!apiKey) {
+        throw new Error('PiAPI API key is required. Add one in Project Settings.');
+    }
+    const { prompt, taskType, imageUrls, videoUrls, audioUrls } = settings;
+
+    // omni_reference requires at least one non-audio reference.
+    const refCount =
+        (imageUrls?.length || 0) +
+        (videoUrls?.length || 0) +
+        (audioUrls?.length || 0);
+    if (refCount === 0) {
+        throw new Error('omni_reference requires at least one image, video, or audio reference.');
+    }
+    if (refCount > 12) {
+        throw new Error(`omni_reference supports up to 12 references total (got ${refCount}).`);
+    }
+    if ((videoUrls?.length || 0) > 1) {
+        // PiAPI currently only supports a single video ref per the spec.
+        console.warn(`[PiAPI] ${videoUrls!.length} video refs provided; only the first will be used.`);
+    }
+
+    const input: PiAPISeedanceInput = {
+        prompt,
+        mode: 'omni_reference',
+        ...(settings.duration !== undefined && { duration: clampDuration(settings.duration) }),
+        ...(settings.aspectRatio && { aspect_ratio: settings.aspectRatio }),
+        ...(settings.resolution && { resolution: settings.resolution }),
+        ...(imageUrls?.length && { image_urls: imageUrls }),
+        ...(videoUrls?.length && { video_urls: videoUrls.slice(0, 1) }),
+        ...(audioUrls?.length && { audio_urls: audioUrls }),
+    };
+
+    console.log('[PiAPI] Submitting Seedance 2 omni_reference task:', {
+        task_type: taskType,
+        ...input,
+    });
+    onProgress?.(`Submitting to PiAPI Seedance 2 (${taskType})...`);
+
+    const submitRes = await fetch(PIAPI_TASK_URL, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-API-Key': apiKey.trim(),
+        },
+        body: JSON.stringify({
+            model: 'seedance',
+            task_type: taskType,
+            input,
+        }),
+    });
+
+    if (!submitRes.ok) {
+        const txt = await submitRes.text().catch(() => '');
+        throw new Error(`PiAPI submit failed: HTTP ${submitRes.status} ${txt.substring(0, 300)}`);
+    }
+
+    const submitBody = (await submitRes.json()) as PiAPITaskResponse;
+    if (submitBody.code !== 200 || !submitBody.data?.task_id) {
+        throw new Error(`PiAPI submit failed: ${submitBody.message || 'no task_id'}`);
+    }
+
+    const taskId = submitBody.data.task_id;
+    console.log(`[PiAPI] Task submitted — id=${taskId}`);
+
+    // ---- Poll ----
+    const POLL_INTERVAL_MS = 5000;
+    const POLL_TIMEOUT_MS = 20 * 60 * 1000; // 20 min max
+    const startedAt = Date.now();
+
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+        if (Date.now() - startedAt > POLL_TIMEOUT_MS) {
+            throw new Error('PiAPI task timed out after 20 minutes.');
+        }
+        await new Promise(r => setTimeout(r, POLL_INTERVAL_MS));
+
+        const pollRes = await fetch(`${PIAPI_TASK_URL}/${taskId}`, {
+            method: 'GET',
+            headers: { 'X-API-Key': apiKey.trim() },
+        });
+        if (!pollRes.ok) {
+            const txt = await pollRes.text().catch(() => '');
+            throw new Error(`PiAPI poll failed: HTTP ${pollRes.status} ${txt.substring(0, 200)}`);
+        }
+        const pollBody = (await pollRes.json()) as PiAPITaskResponse;
+        const status = pollBody.data?.status || '';
+        const normalized = status.toLowerCase();
+
+        console.log(`[PiAPI] task=${taskId} status=${status}`);
+        onProgress?.(`PiAPI Seedance: ${status}`);
+
+        if (normalized === 'completed') {
+            const videoUrl = pollBody.data?.output?.video;
+            if (!videoUrl) throw new Error('PiAPI task completed but no video URL in output.');
+            console.log('[PiAPI] Video ready:', videoUrl);
+            onProgress?.('Downloading video...');
+
+            // Try to fetch the bytes so we can store offline as base64 (matches
+            // the fal.ai service's return contract). CORS on PiAPI CDN would
+            // make this fail — in that case we return the URL directly.
+            try {
+                const videoRes = await fetch(videoUrl);
+                if (!videoRes.ok) throw new Error(`Download failed: HTTP ${videoRes.status}`);
+                const blob = await videoRes.blob();
+                return await blobToBase64(blob);
+            } catch (downloadErr) {
+                console.warn('[PiAPI] Could not fetch video bytes, returning URL:', downloadErr);
+                return videoUrl;
+            }
+        }
+
+        if (normalized === 'failed') {
+            const errMsg =
+                pollBody.data?.error?.message ||
+                pollBody.message ||
+                `task failed (code=${pollBody.data?.error?.code})`;
+            throw new Error(`PiAPI task failed: ${errMsg}`);
+        }
+
+        // Pending / Staged / Processing → keep polling.
+    }
+};
+
+// ============================================================
+// Convenience: batch-upload mixed refs so callers don't have to
+// ============================================================
+
+/**
+ * Given a list of URLs that might be any mix of https / data: / blob:, return
+ * a new list of public https URLs suitable for `image_urls` / `video_urls`.
+ * Uploads only what needs uploading; passes through existing https URLs.
+ */
+export const uploadRefsToPiAPI = async (
+    urls: string[] | undefined,
+    apiKey: string,
+    namePrefix: string
+): Promise<string[]> => {
+    if (!urls || urls.length === 0) return [];
+    const results = await Promise.all(
+        urls.map((u, i) => uploadPiAPIEphemeral(u, apiKey, `${namePrefix}_${i}`))
+    );
+    return results.filter((u): u is string => !!u);
+};

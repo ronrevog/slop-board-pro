@@ -55,6 +55,12 @@ export type VideoProvider = 'veo' | 'fal-wan' | 'fal-aurora' | 'seedance';
 export interface VideoProviderSettings {
   provider: VideoProvider;
   falApiKey?: string;
+  /**
+   * PiAPI key — used for Seedance 2 `omni_reference` generations when the user
+   * selects video references. Separate from the fal.ai key so either integration
+   * can be used independently.
+   */
+  piapiApiKey?: string;
   // Wan v2.6 specific settings
   wanResolution: '720p' | '1080p';
   wanDuration: '5' | '10' | '15';

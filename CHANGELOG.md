@@ -5,6 +5,36 @@ All notable changes to Slop Board Pro are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to semantic versioning where practical.
 
+## [1.4.7] — 2026-04-21
+
+### Added — PiAPI Seedance 2 routing for video references
+
+- **New provider: PiAPI Seedance 2** (`services/piapiService.ts`). When Seedance
+  is in reference-to-video mode AND one or more reference **videos** are
+  selected in the picker, the app now routes the generation through PiAPI's
+  Seedance 2 `omni_reference` endpoint instead of fal.ai. Image-only
+  reference-to-video still goes through fal.ai as before.
+- Upload helper `uploadPiAPIEphemeral` pushes local `data:`/`blob:` media to
+  PiAPI's ephemeral resource store (`POST upload.theapi.app/api/ephemeral_resource`)
+  and returns a public https URL; https URLs pass through unchanged. 10 MB cap
+  per file.
+- Task submission + polling (`generatePiAPISeedance2Omni`): submits a Seedance 2
+  or Seedance 2 Fast task and polls `/api/v1/task/{id}` every 5s up to 20
+  minutes, returning the generated video (downloaded as base64 data URL, or raw
+  https URL if CORS blocks the fetch).
+- Fast model (`fast/reference-to-video` in the UI) maps to PiAPI `seedance-2-fast`;
+  quality maps to `seedance-2`. Max 1 video ref + up to 11 image refs (12 total,
+  per PiAPI's current omni_reference limit).
+- **New field `piapiApiKey`** in `VideoProviderSettings`, plus a dedicated
+  input in the Settings tab's API Keys section with a save-to-localStorage
+  button (key `slop_piapi_api_key`). Auto-loaded on project open just like the
+  fal.ai key.
+- **VideoShotCard UX**: the Reference Videos hint now explicitly says
+  generation will route through PiAPI Seedance 2 (omni_reference) when videos
+  are picked, warns if the PiAPI key is missing, and labels the generate button
+  as "(PiAPI)" in that mode. Disabled state is driven by the correct key
+  depending on the branch.
+
 ## [1.4.6] — 2026-04-20
 
 ### Added — Seedance Reference Videos

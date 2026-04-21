@@ -10,6 +10,7 @@ import { ShotDetailModal } from './ShotDetailModal';
 import { VideoShotCard, WanGenerationSettings, ProjectVideoRef } from './VideoShotCard';
 import { generateWanVideo, generateAuroraVideo, validateFalApiKey, AuroraGenerationSettings, uploadFileToFal } from '../services/falService';
 import { generateSeedanceVideo, SeedanceGenerationSettings, uploadImageToFalStorage } from '../services/seedanceService';
+import { generatePiAPISeedance2Omni, uploadRefsToPiAPI, uploadPiAPIEphemeral, PiAPISeedanceAspectRatio, PiAPISeedanceResolution } from '../services/piapiService';
 import { MotionControl } from './MotionControl';
 import { Clapperboard, Settings, Users, MapPin, Film, ChevronRight, LayoutGrid, Plus, ChevronLeft, Home, Video, Play, Loader2, Download, AlertCircle, ImageIcon, MonitorPlay, Layers, Trash2, Edit3, ChevronDown, ChevronUp, Focus, FileText, Upload, CheckSquare, Square, Bot, Clock } from 'lucide-react';
 import { AIAgent } from './agent/AIAgent';
@@ -70,18 +71,25 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ initialProject, on
   // Master API key save status
   const [masterKeySaved, setMasterKeySaved] = useState(false);
 
+  // PiAPI key save status — PiAPI doesn't expose a validation endpoint so we
+  // just confirm "saved" after the user clicks the button.
+  const [piapiKeyStatus, setPiapiKeyStatus] = useState<'idle' | 'saved'>('idle');
+
   // Auto-populate API keys from localStorage on mount (so keys persist across projects/sessions)
   useEffect(() => {
     const savedFalKey = localStorage.getItem('slop_fal_api_key');
+    const savedPiapiKey = localStorage.getItem('slop_piapi_api_key');
 
     setProject(prev => {
       const vs = prev.videoSettings || DEFAULT_VIDEO_SETTINGS;
       const newFal = !vs.falApiKey && savedFalKey ? savedFalKey : vs.falApiKey;
-      if (newFal !== vs.falApiKey) {
-        return { ...prev, videoSettings: { ...vs, falApiKey: newFal } };
+      const newPiapi = !vs.piapiApiKey && savedPiapiKey ? savedPiapiKey : vs.piapiApiKey;
+      if (newFal !== vs.falApiKey || newPiapi !== vs.piapiApiKey) {
+        return { ...prev, videoSettings: { ...vs, falApiKey: newFal, piapiApiKey: newPiapi } };
       }
       return prev;
     });
+    if (savedPiapiKey) setPiapiKeyStatus('saved');
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Save all API keys to localStorage
@@ -96,6 +104,12 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ initialProject, on
     if (falKey?.trim()) {
       localStorage.setItem('slop_fal_api_key', falKey.trim());
       setFalKeyStatus('valid');
+    }
+    // PiAPI key
+    const piapiKey = project.videoSettings?.piapiApiKey;
+    if (piapiKey?.trim()) {
+      localStorage.setItem('slop_piapi_api_key', piapiKey.trim());
+      setPiapiKeyStatus('saved');
     }
     // Save project too
     onSave(project);
@@ -1498,13 +1512,126 @@ Style: ${project.settings.cinematographer}, shot on ${project.settings.filmStock
     return new File([u8arr], filename, { type: mime });
   };
 
-  // --- Seedance 2.0 Video Generation (fal.ai SDK) ---
+  // --- Seedance Video Generation ---
+  // Routes to PiAPI Seedance 2 (omni_reference mode) when the user has selected
+  // one or more reference videos. Otherwise falls through to the existing
+  // fal.ai Seedance flow (image-to-video / text-to-video / image-only refs).
   const handleGenerateSeedanceVideo = async (shotId: string, seedSettings: SeedanceGenerationSettings) => {
     if (!activeSceneId) return;
     const shot = currentShots.find(s => s.id === shotId);
     if (!shot) return;
 
     const videoSettings = project.videoSettings || DEFAULT_VIDEO_SETTINGS;
+    const hasVideoRefs = !!(seedSettings.referenceVideoUrls && seedSettings.referenceVideoUrls.length > 0);
+
+    // ────────────────────────────────────────────────────────────────────
+    // Branch 1: PiAPI Seedance 2 omni_reference (video references present)
+    // ────────────────────────────────────────────────────────────────────
+    if (hasVideoRefs) {
+      if (!videoSettings.piapiApiKey) {
+        console.error('PiAPI key not configured');
+        updateSceneShots(activeSceneId, shots =>
+          shots.map(s => s.id === shotId ? { ...s, videoError: 'PiAPI key not configured. Video references require PiAPI — add one in Settings.' } : s)
+        );
+        return;
+      }
+
+      updateSceneShots(activeSceneId, shots =>
+        shots.map(s => s.id === shotId ? { ...s, isVideoGenerating: true, videoError: undefined } : s)
+      );
+
+      try {
+        const promptToUse = shot.videoPrompt || synthesizeVideoPrompt(shot);
+        const piapiKey = videoSettings.piapiApiKey;
+        const isFastModel = seedSettings.model.startsWith('fast/');
+        const taskType = isFastModel ? 'seedance-2-fast' : 'seedance-2';
+
+        // Gather every image reference the UI has collected + the storyboard
+        // image itself (if the user has one) — they all get uploaded to PiAPI
+        // ephemeral storage (https URLs pass through unchanged).
+        const rawImageRefs: string[] = [];
+        if (shot.imageUrl) rawImageRefs.push(shot.imageUrl);
+        if (seedSettings.referenceImageUrl) rawImageRefs.push(seedSettings.referenceImageUrl);
+        if (seedSettings.referenceImages?.length) rawImageRefs.push(...seedSettings.referenceImages);
+        if (seedSettings.referenceImageUrls?.length) rawImageRefs.push(...seedSettings.referenceImageUrls);
+        const uniqueImageRefs = Array.from(new Set(rawImageRefs.filter(Boolean)));
+
+        console.log(`[PiAPI] Uploading ${uniqueImageRefs.length} image ref(s) + ${seedSettings.referenceVideoUrls!.length} video ref(s)...`);
+        const [imageUrls, videoUrls] = await Promise.all([
+          uploadRefsToPiAPI(uniqueImageRefs, piapiKey, `${shot.id}_img`),
+          uploadRefsToPiAPI(seedSettings.referenceVideoUrls, piapiKey, `${shot.id}_vid`),
+        ]);
+
+        // PiAPI omni_reference cap: 12 total references. If we overshoot (lots
+        // of shots in the project), drop extras — keep the video ref first.
+        const MAX_REFS = 12;
+        let finalImageUrls = imageUrls;
+        const finalVideoUrls = videoUrls.slice(0, 1); // API currently accepts 1 video
+        const totalRefs = finalImageUrls.length + finalVideoUrls.length;
+        if (totalRefs > MAX_REFS) {
+          const keep = MAX_REFS - finalVideoUrls.length;
+          finalImageUrls = finalImageUrls.slice(0, Math.max(0, keep));
+          console.warn(`[PiAPI] Trimmed refs to ${MAX_REFS} total (kept ${finalImageUrls.length} images + ${finalVideoUrls.length} video).`);
+        }
+
+        // Map Seedance settings → PiAPI settings.
+        const mappedAspect: Exclude<PiAPISeedanceAspectRatio, 'auto'> | undefined =
+          seedSettings.aspectRatio && seedSettings.aspectRatio !== 'auto'
+            ? (seedSettings.aspectRatio as Exclude<PiAPISeedanceAspectRatio, 'auto'>)
+            : '16:9';
+        const mappedResolution: PiAPISeedanceResolution | undefined =
+          seedSettings.resolution === '480p' || seedSettings.resolution === '720p'
+            ? seedSettings.resolution
+            : '720p';
+        const mappedDuration =
+          seedSettings.duration === 'auto' || !seedSettings.duration
+            ? 5
+            : parseInt(seedSettings.duration, 10);
+
+        const videoUrl = await generatePiAPISeedance2Omni(
+          {
+            taskType,
+            prompt: promptToUse,
+            duration: mappedDuration,
+            aspectRatio: mappedAspect,
+            resolution: mappedResolution,
+            imageUrls: finalImageUrls,
+            videoUrls: finalVideoUrls,
+          },
+          piapiKey
+        );
+
+        const newSegment: VideoSegment = {
+          id: crypto.randomUUID(),
+          url: videoUrl,
+          timestamp: Date.now(),
+          model: isFastModel ? 'fast' : 'quality',
+          isExtension: false,
+        };
+        const existingSegments = shot.videoSegments || [];
+        updateSceneShots(activeSceneId, shots =>
+          shots.map(s => s.id === shotId ? {
+            ...s,
+            isVideoGenerating: false,
+            videoUrl,
+            videoSegments: [...existingSegments, newSegment],
+            videoError: undefined,
+          } : s)
+        );
+        return;
+      } catch (e: any) {
+        console.error('PiAPI Seedance generation failed:', e);
+        const errorMessage = e.message || 'PiAPI Seedance generation failed';
+        updateSceneShots(activeSceneId, shots =>
+          shots.map(s => s.id === shotId ? { ...s, isVideoGenerating: false, videoError: errorMessage } : s)
+        );
+        return;
+      }
+    }
+
+    // ────────────────────────────────────────────────────────────────────
+    // Branch 2: fal.ai Seedance 2.0 (no video references)
+    // ────────────────────────────────────────────────────────────────────
     if (!videoSettings.falApiKey) {
       console.error('fal.ai API key not configured');
       updateSceneShots(activeSceneId, shots =>
@@ -2467,6 +2594,51 @@ TIP: Select (highlight) a portion of text and click 'Analyze Scene' to analyze o
                   )}
                   <p className="text-xs text-neutral-600">
                     Shared across all fal.ai models. Get yours from <a href="https://fal.ai/dashboard/keys" target="_blank" rel="noopener noreferrer" className="text-red-500 hover:underline">fal.ai/dashboard/keys</a>
+                  </p>
+                </div>
+
+                {/* PiAPI Key — powers Seedance 2 omni_reference (video refs) */}
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-neutral-500 uppercase tracking-widest">
+                    PiAPI Key <span className="text-neutral-600">(Seedance 2 omni_reference — used when you pick video references)</span>
+                  </label>
+                  <div className="flex gap-2">
+                    <input
+                      type="password"
+                      className={`flex-1 bg-neutral-800 border rounded-md p-3 text-sm text-white focus:ring-1 focus:ring-emerald-500 outline-none ${piapiKeyStatus === 'saved' ? 'border-emerald-600' : 'border-neutral-700'
+                        }`}
+                      placeholder="Enter your PiAPI key..."
+                      value={project.videoSettings?.piapiApiKey || ''}
+                      onChange={(e) => {
+                        setPiapiKeyStatus('idle');
+                        setProject(p => ({
+                          ...p,
+                          videoSettings: { ...(p.videoSettings || DEFAULT_VIDEO_SETTINGS), piapiApiKey: e.target.value }
+                        }));
+                      }}
+                    />
+                    <Button
+                      variant={piapiKeyStatus === 'saved' ? 'secondary' : 'primary'}
+                      onClick={() => {
+                        const key = project.videoSettings?.piapiApiKey;
+                        if (!key?.trim()) return;
+                        localStorage.setItem('slop_piapi_api_key', key.trim());
+                        setPiapiKeyStatus('saved');
+                        onSave(project);
+                      }}
+                      disabled={!project.videoSettings?.piapiApiKey}
+                      className="whitespace-nowrap"
+                    >
+                      {piapiKeyStatus === 'saved' ? '✓ Saved' : 'Save Key'}
+                    </Button>
+                  </div>
+                  {piapiKeyStatus === 'saved' && (
+                    <p className="text-xs text-emerald-500 flex items-center gap-1">
+                      <CheckSquare className="w-3 h-3" /> PiAPI key saved
+                    </p>
+                  )}
+                  <p className="text-xs text-neutral-600">
+                    Only used when Seedance is in reference-to-video mode with one or more <strong>video</strong> references selected. Get yours at <a href="https://piapi.ai" target="_blank" rel="noopener noreferrer" className="text-emerald-500 hover:underline">piapi.ai</a>.
                   </p>
                 </div>
 
