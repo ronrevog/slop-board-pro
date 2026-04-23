@@ -5,6 +5,51 @@ All notable changes to Slop Board Pro are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to semantic versioning where practical.
 
+## [1.4.8] — 2026-04-23
+
+### Changed — All Seedance generations now route through PiAPI
+
+Per user feedback that PiAPI is more reliable, **every** Seedance generation
+(image-to-video, text-to-video, reference-to-video) now routes through PiAPI's
+Seedance 2 API instead of fal.ai. The fal.ai Seedance integration is no longer
+called from the UI (code still in `services/seedanceService.ts` but unused for
+generation — only the type / constants exports are consumed by the UI).
+
+**fal.ai → PiAPI mapping** in `ProjectEditor.handleGenerateSeedanceVideo`:
+
+| Old fal.ai model           | New PiAPI mode       | Task type           |
+| -------------------------- | -------------------- | ------------------- |
+| `image-to-video`           | `first_last_frames`  | `seedance-2`        |
+| `text-to-video`            | `text_to_video`      | `seedance-2`        |
+| `reference-to-video`       | `omni_reference`     | `seedance-2`        |
+| `fast/text-to-video`       | `text_to_video`      | `seedance-2-fast`   |
+| `fast/reference-to-video`  | `omni_reference`     | `seedance-2-fast`   |
+
+### Added
+
+- `services/piapiService.ts` — new generic `generatePiAPISeedance2(settings)`
+  function supporting all three PiAPI modes with full mode-specific validation
+  (`text_to_video`, `first_last_frames`, `omni_reference`). The old
+  `generatePiAPISeedance2Omni` is kept as a thin wrapper for back-compat.
+- **Seedance Extend Video** now uses PiAPI `first_last_frames` — extracts the
+  last frame of the existing video, uploads it to PiAPI ephemeral storage, and
+  submits it as the first frame of a new generation with a "continue seamlessly"
+  prompt prefix.
+
+### UI updates
+
+- Settings tab:
+  - fal.ai key description now reads "(Wan v2.6 + Lip Sync)" — Seedance 2.0
+    dropped.
+  - PiAPI key description rewritten to "Required for all Seedance generations".
+  - Default Video Provider card for Seedance 2.0 now says "PiAPI, 4-15s".
+- VideoShotCard:
+  - Generating overlay label: "Seedance 2.0 (PiAPI)".
+  - Settings panel footer: "⚡ Powered by PiAPI (Seedance 2.0)".
+  - API-key warning: "Add PiAPI key in Project Settings — Seedance runs on
+    PiAPI."
+  - Generate button disabled now requires `piapiApiKey` (not fal.ai key).
+
 ## [1.4.7] — 2026-04-21
 
 ### Added — PiAPI Seedance 2 routing for video references

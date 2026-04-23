@@ -178,6 +178,25 @@ export interface PiAPISeedance2OmniSettings {
     audioUrls?: string[];
 }
 
+/**
+ * Generic Seedance 2 settings covering all three PiAPI modes.
+ * Mode-specific constraints:
+ *   - `text_to_video`:      no refs
+ *   - `first_last_frames`:  1-2 `imageUrls` required (first, optional last)
+ *   - `omni_reference`:     1-12 mixed refs total; ≥1 non-audio ref required
+ */
+export interface PiAPISeedance2GenerateSettings {
+    mode: PiAPISeedanceMode;
+    taskType: PiAPISeedanceTaskType;
+    prompt: string;
+    duration?: number;
+    aspectRatio?: PiAPISeedanceAspectRatio;
+    resolution?: PiAPISeedanceResolution;
+    imageUrls?: string[];
+    videoUrls?: string[];
+    audioUrls?: string[];
+}
+
 /** Clamp duration into the API's 4-15 integer range. */
 const clampDuration = (v: unknown): number | undefined => {
     if (v === undefined || v === null) return undefined;
@@ -199,43 +218,79 @@ export const generatePiAPISeedance2Omni = async (
     apiKey: string,
     onProgress?: (status: string, position?: number) => void
 ): Promise<string> => {
+    return generatePiAPISeedance2({ ...settings, mode: 'omni_reference' }, apiKey, onProgress);
+};
+
+/**
+ * Generic Seedance 2 task submit + poll. Handles all three PiAPI modes
+ * (`text_to_video`, `first_last_frames`, `omni_reference`). Validates
+ * mode-specific constraints before submitting.
+ *
+ * Returns the video as a base64 data URL (same contract as fal.ai service).
+ * Falls back to the raw https URL if downloading the bytes fails (CORS).
+ */
+export const generatePiAPISeedance2 = async (
+    settings: PiAPISeedance2GenerateSettings,
+    apiKey: string,
+    onProgress?: (status: string, position?: number) => void
+): Promise<string> => {
     if (!apiKey) {
         throw new Error('PiAPI API key is required. Add one in Project Settings.');
     }
-    const { prompt, taskType, imageUrls, videoUrls, audioUrls } = settings;
+    const { mode, prompt, taskType, imageUrls, videoUrls, audioUrls } = settings;
 
-    // omni_reference requires at least one non-audio reference.
-    const refCount =
-        (imageUrls?.length || 0) +
-        (videoUrls?.length || 0) +
-        (audioUrls?.length || 0);
-    if (refCount === 0) {
-        throw new Error('omni_reference requires at least one image, video, or audio reference.');
-    }
-    if (refCount > 12) {
-        throw new Error(`omni_reference supports up to 12 references total (got ${refCount}).`);
-    }
-    if ((videoUrls?.length || 0) > 1) {
-        // PiAPI currently only supports a single video ref per the spec.
-        console.warn(`[PiAPI] ${videoUrls!.length} video refs provided; only the first will be used.`);
+    // ---- Mode-specific validation ----
+    if (mode === 'text_to_video') {
+        const anyRefs = (imageUrls?.length || 0) + (videoUrls?.length || 0) + (audioUrls?.length || 0);
+        if (anyRefs > 0) {
+            console.warn('[PiAPI] text_to_video does not accept references — dropping extras.');
+        }
+    } else if (mode === 'first_last_frames') {
+        const imgCount = imageUrls?.length || 0;
+        if (imgCount < 1 || imgCount > 2) {
+            throw new Error(`first_last_frames requires 1-2 images (got ${imgCount}).`);
+        }
+        if ((videoUrls?.length || 0) > 0 || (audioUrls?.length || 0) > 0) {
+            console.warn('[PiAPI] first_last_frames does not accept video/audio refs — dropping them.');
+        }
+    } else if (mode === 'omni_reference') {
+        const refCount = (imageUrls?.length || 0) + (videoUrls?.length || 0) + (audioUrls?.length || 0);
+        if (refCount === 0) {
+            throw new Error('omni_reference requires at least one image, video, or audio reference.');
+        }
+        if (refCount > 12) {
+            throw new Error(`omni_reference supports up to 12 references total (got ${refCount}).`);
+        }
+        if ((videoUrls?.length || 0) > 1) {
+            console.warn(`[PiAPI] ${videoUrls!.length} video refs provided; only the first will be used.`);
+        }
     }
 
+    // ---- Build request body ----
     const input: PiAPISeedanceInput = {
         prompt,
-        mode: 'omni_reference',
+        mode,
         ...(settings.duration !== undefined && { duration: clampDuration(settings.duration) }),
-        ...(settings.aspectRatio && { aspect_ratio: settings.aspectRatio }),
+        // aspect_ratio is IGNORED in first_last_frames mode per the API docs;
+        // skip sending it so we don't trip validation.
+        ...(mode !== 'first_last_frames' && settings.aspectRatio && { aspect_ratio: settings.aspectRatio }),
         ...(settings.resolution && { resolution: settings.resolution }),
-        ...(imageUrls?.length && { image_urls: imageUrls }),
-        ...(videoUrls?.length && { video_urls: videoUrls.slice(0, 1) }),
-        ...(audioUrls?.length && { audio_urls: audioUrls }),
     };
 
-    console.log('[PiAPI] Submitting Seedance 2 omni_reference task:', {
+    if (mode === 'first_last_frames') {
+        input.image_urls = (imageUrls || []).slice(0, 2);
+    } else if (mode === 'omni_reference') {
+        if (imageUrls?.length) input.image_urls = imageUrls;
+        if (videoUrls?.length) input.video_urls = videoUrls.slice(0, 1); // 1 video max
+        if (audioUrls?.length) input.audio_urls = audioUrls;
+    }
+    // text_to_video: nothing extra
+
+    console.log(`[PiAPI] Submitting Seedance 2 ${mode} task:`, {
         task_type: taskType,
         ...input,
     });
-    onProgress?.(`Submitting to PiAPI Seedance 2 (${taskType})...`);
+    onProgress?.(`Submitting to PiAPI Seedance 2 (${taskType} · ${mode})...`);
 
     const submitRes = await fetch(PIAPI_TASK_URL, {
         method: 'POST',
