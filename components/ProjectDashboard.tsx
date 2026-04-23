@@ -156,7 +156,7 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
           <div className="space-y-2">
             <div className="flex items-center gap-3">
               <img src="/img/slopboard_logo_text.png" alt="Slop Board" className="h-12 w-auto" />
-              <span className="text-xs font-normal text-neutral-600">v1.4.8</span>
+              <span className="text-xs font-normal text-neutral-600">v1.4.9</span>
             </div>
             <p className="text-neutral-500 uppercase tracking-widest text-sm font-medium">Cinematic Project Manager</p>
           </div>
@@ -338,7 +338,7 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
 
       {/* Footer */}
       <div className="max-w-7xl mx-auto mt-12 pt-6 border-t border-neutral-800/50 text-center text-neutral-600 text-sm">
-        Version 1.4.8
+        Version 1.4.9
       </div>
     </div>
   );

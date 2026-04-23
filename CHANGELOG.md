@@ -5,6 +5,25 @@ All notable changes to Slop Board Pro are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to semantic versioning where practical.
 
+## [1.4.9] — 2026-04-23
+
+### Fixed
+
+- **Firestore "Unsupported field value: undefined" errors** during auto-save.
+  Reproduced while a Seedance generation was running: `handleGenerateSeedanceVideo`
+  sets `videoError: undefined` on the shot when it starts, and the debounced
+  auto-save then tried to push that through `setDoc()`, which Firestore rejects.
+  Fixed by initialising Firestore with `ignoreUndefinedProperties: true` via
+  `initializeFirestore(...)` — undefined fields now get dropped silently
+  instead of throwing.
+
+### Notes — PiAPI queue behaviour
+
+PiAPI's Seedance 2 queue runs hot between **09:00-15:00 UTC** (per their docs,
+queue times "may extend to several hours" in that window). Long `pending` and
+`staged` spells are the queue, not a client-side stall. Status is logged to the
+console during polling.
+
 ## [1.4.8] — 2026-04-23
 
 ### Changed — All Seedance generations now route through PiAPI

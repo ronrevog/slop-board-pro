@@ -7,7 +7,7 @@
 
 import { initializeApp, FirebaseApp } from 'firebase/app';
 import { getAuth, Auth } from 'firebase/auth';
-import { getFirestore, Firestore } from 'firebase/firestore';
+import { initializeFirestore, Firestore } from 'firebase/firestore';
 import { getStorage, FirebaseStorage } from 'firebase/storage';
 
 const firebaseConfig = {
@@ -28,7 +28,11 @@ let storage: FirebaseStorage;
 try {
     app = initializeApp(firebaseConfig);
     auth = getAuth(app);
-    db = getFirestore(app);
+    // `ignoreUndefinedProperties: true` — the app frequently sets fields like
+    // `videoError: undefined` when clearing state. Firestore rejects explicit
+    // `undefined` values, so this tells the SDK to drop them silently instead
+    // of throwing "Unsupported field value: undefined" on every auto-save.
+    db = initializeFirestore(app, { ignoreUndefinedProperties: true });
     storage = getStorage(app);
     console.log('🔥 Firebase initialized — project:', firebaseConfig.projectId);
 } catch (error) {

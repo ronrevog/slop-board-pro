@@ -1632,6 +1632,9 @@ Style: ${project.settings.cinematographer}, shot on ${project.settings.filmStock
           videoUrls: videoUrls.length ? videoUrls : undefined,
         },
         piapiKey
+        // Note: PiAPI status (pending/staged/processing) is logged to the
+        // console by the service itself. During peak hours (09:00-15:00 UTC)
+        // Seedance queues can run into hours per PiAPI's own docs.
       );
 
       const newSegment: VideoSegment = {
