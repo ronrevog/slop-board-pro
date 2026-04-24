@@ -5,6 +5,30 @@ All notable changes to Slop Board Pro are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to semantic versioning where practical.
 
+## [1.4.15] — 2026-04-24
+
+### Fixed — CORS block on PiAPI ephemeral uploads in production
+
+v1.4.14's re-upload fix routed bad-extension URLs through PiAPI's ephemeral
+store (`upload.theapi.app`), but that endpoint blocks browser CORS in
+production. Dev worked only because Vite had a `/piapi-upload` proxy.
+
+Fix: re-upload via **Firebase Storage** instead (which we already own, which
+allows authenticated writes, and whose public download URLs are known to
+work as PiAPI references). New `reuploadUrlToFirebaseStorage` helper in
+`firebaseSync.ts` fetches the source URL, determines the correct extension
+from the blob's mime, and writes to `users/{uid}/projects/{pid}/…`.
+
+Call sites updated (all Seedance paths):
+- Omni-reference `video_urls`: any https URL that doesn't end in `.mp4`/`.mov`
+  (plus all `data:`/`blob:` URLs) is re-uploaded via Firebase; the shot's
+  matching `videoSegment.url` is patched in state so the fix persists and
+  won't need to re-run next time.
+- first_last_frames `image_urls` (image-to-video): only `data:`/`blob:`
+  inputs are re-uploaded; existing https URLs pass through.
+- Seedance Extend (last-frame → first-frame): extracted last frame (data URL)
+  is uploaded to Firebase Storage, not PiAPI.
+
 ## [1.4.14] — 2026-04-24
 
 ### Fixed — Seedance reference videos rejected by PiAPI ("invalid video url, allowed format: .mp4")

@@ -19,6 +19,7 @@ import {
   PiAPISeedanceMode,
   PiAPISeedanceTaskType,
 } from '../services/piapiService';
+import { reuploadUrlToFirebaseStorage } from '../services/firebaseSync';
 import { MotionControl } from './MotionControl';
 import { Clapperboard, Settings, Users, MapPin, Film, ChevronRight, LayoutGrid, Plus, ChevronLeft, Home, Video, Play, Loader2, Download, AlertCircle, ImageIcon, MonitorPlay, Layers, Trash2, Edit3, ChevronDown, ChevronUp, Focus, FileText, Upload, CheckSquare, Square, Bot, Clock } from 'lucide-react';
 import { AIAgent } from './agent/AIAgent';
@@ -1630,8 +1631,16 @@ Style: ${project.settings.cinematographer}, shot on ${project.settings.filmStock
         if (!shot.imageUrl) {
           throw new Error('Image-to-video requires a storyboard image. Generate one first.');
         }
-        imageUrls = await uploadRefsToPiAPI([shot.imageUrl], piapiKey, `${shot.id}_frame`);
+        // If the image is already a public https URL we can pass it straight to
+        // PiAPI. Only `data:`/`blob:` need to be re-uploaded, and we do it via
+        // Firebase Storage (the PiAPI ephemeral upload endpoint is CORS-blocked
+        // in production).
+        const img = shot.imageUrl.startsWith('http')
+          ? shot.imageUrl
+          : await reuploadUrlToFirebaseStorage(shot.imageUrl, project.id, `${shot.id}_frame`);
+        imageUrls = [img];
       } else if (mode === 'omni_reference') {
+
         // Collect every image ref + the storyboard image + explicit video refs.
         const rawImageRefs: string[] = [];
         if (shot.imageUrl) rawImageRefs.push(shot.imageUrl);
@@ -1640,19 +1649,53 @@ Style: ${project.settings.cinematographer}, shot on ${project.settings.filmStock
         if (seedSettings.referenceImageUrls?.length) rawImageRefs.push(...seedSettings.referenceImageUrls);
         const uniqueImageRefs = Array.from(new Set(rawImageRefs.filter(Boolean)));
 
-        console.log(`[PiAPI] Uploading ${uniqueImageRefs.length} image ref(s) + ${seedSettings.referenceVideoUrls?.length || 0} video ref(s)...`);
+        // PiAPI Seedance's `video_urls` validator rejects any URL whose
+        // extension isn't `.mp4` / `.mov`. We historically saved video
+        // segments to Firebase Storage as `.png` (firebaseSync bug), so
+        // any such legacy URLs must be re-uploaded with a proper `.mp4`
+        // name BEFORE we send them to PiAPI. We do the re-upload through
+        // Firebase Storage (not PiAPI's ephemeral store) because the
+        // PiAPI upload endpoint is CORS-blocked in production.
+        const fixVideoUrlExtensionIfNeeded = async (u: string): Promise<string> => {
+          if (!u) return u;
+          if (u.startsWith('data:') || u.startsWith('blob:')) {
+            // PiAPI's ephemeral upload also CORS-blocks in prod, so route
+            // local data/blob through Firebase Storage too. reuploadUrlToFirebaseStorage
+            // fetches via `fetch(u)` which handles both schemes.
+            const fixed = await reuploadUrlToFirebaseStorage(u, project.id, `${shot.id}_vidref`);
+            return fixed;
+          }
+          const isHttp = u.startsWith('http://') || u.startsWith('https://');
+          if (!isHttp) return u;
+          const pathOnly = u.split('?')[0].toLowerCase();
+          const ok = pathOnly.endsWith('.mp4') || pathOnly.endsWith('.mov');
+          if (ok) return u;
+          console.log(`[Seedance] Video ref has bad extension; re-uploading to Firebase Storage with correct ext...`);
+          const fixed = await reuploadUrlToFirebaseStorage(u, project.id, `${shot.id}_vidref_fix`);
+          // Update the shot's matching videoSegment in state so the fix is
+          // persisted (next time this URL won't need re-uploading).
+          updateSceneShots(activeSceneId, shots => shots.map(s => {
+            if (s.id !== shot.id) return s;
+            return {
+              ...s,
+              videoUrl: s.videoUrl === u ? fixed : s.videoUrl,
+              videoSegments: s.videoSegments?.map(seg =>
+                seg.url === u ? { ...seg, url: fixed } : seg
+              ),
+            };
+          }));
+          return fixed;
+        };
+
+        console.log(`[PiAPI] Preparing ${uniqueImageRefs.length} image ref(s) + ${seedSettings.referenceVideoUrls?.length || 0} video ref(s)...`);
+        const fixedVideoUrls = await Promise.all(
+          (seedSettings.referenceVideoUrls || []).map(fixVideoUrlExtensionIfNeeded)
+        );
         const [imgs, vids] = await Promise.all([
-          uploadRefsToPiAPI(uniqueImageRefs, piapiKey, `${shot.id}_img`, {
-            requiredExts: ['png', 'jpg', 'jpeg', 'webp', 'gif'],
-          }),
-          // PiAPI Seedance's `video_urls` validator rejects any URL whose
-          // extension isn't `.mp4` / `.mov`. We historically saved video
-          // segments to Firebase Storage as `.png` (firebaseSync bug), so
-          // force those to be re-uploaded through PiAPI's ephemeral store
-          // where we control the filename.
-          uploadRefsToPiAPI(seedSettings.referenceVideoUrls, piapiKey, `${shot.id}_vid`, {
-            requiredExts: ['mp4', 'mov'],
-          }),
+          uploadRefsToPiAPI(uniqueImageRefs, piapiKey, `${shot.id}_img`),
+          // Video URLs are now all Firebase Storage https URLs with correct
+          // `.mp4`/`.mov` extensions → pass-through in uploadRefsToPiAPI.
+          uploadRefsToPiAPI(fixedVideoUrls, piapiKey, `${shot.id}_vid`),
         ]);
         imageUrls = imgs;
         videoUrls = vids.slice(0, 1); // 1 video max
@@ -1762,20 +1805,23 @@ Style: ${project.settings.cinematographer}, shot on ${project.settings.filmStock
       const promptToUse = shot.videoPrompt || synthesizeVideoPrompt(shot);
       const piapiKey = videoSettings.piapiApiKey;
 
-      // Pull the last frame of the existing video, upload to PiAPI, and use it
-      // as the first frame of a new first_last_frames generation (the cleanest
-      // PiAPI equivalent of "extend").
+      // Pull the last frame of the existing video, upload to Firebase Storage
+      // (PiAPI's ephemeral upload endpoint is CORS-blocked in production), and
+      // use it as the first frame of a new first_last_frames generation (the
+      // cleanest PiAPI equivalent of "extend").
       let firstFrameUrl: string;
       try {
         console.log('Extracting last frame for Seedance extension...');
         const lastFrame = await extractLastFrameFromVideo(shot.videoUrl);
-        firstFrameUrl = await uploadPiAPIEphemeral(lastFrame, piapiKey, `${shot.id}_extend_frame`);
+        firstFrameUrl = await reuploadUrlToFirebaseStorage(lastFrame, project.id, `${shot.id}_extend_frame`);
       } catch (frameErr) {
         console.warn('Could not extract last frame, falling back to storyboard image:', frameErr);
         if (!shot.imageUrl) {
           throw new Error('Could not extract last frame from video and no storyboard image to fall back to.');
         }
-        firstFrameUrl = await uploadPiAPIEphemeral(shot.imageUrl, piapiKey, `${shot.id}_extend_fallback`);
+        firstFrameUrl = shot.imageUrl.startsWith('http')
+          ? shot.imageUrl
+          : await reuploadUrlToFirebaseStorage(shot.imageUrl, project.id, `${shot.id}_extend_fallback`);
       }
 
       const { taskType, aspectRatio, resolution, duration } = mapSeedanceSettingsToPiAPI(seedSettings);

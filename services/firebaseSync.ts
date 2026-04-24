@@ -91,10 +91,65 @@ const uploadBase64Image = async (
 
 
 /**
+ * Re-upload an existing https URL (typically an old Firebase Storage URL
+ * saved with the wrong extension — e.g. `_vseg_….png` for an MP4) back to
+ * Firebase Storage with a correct mime-derived extension.
+ *
+ * Why this exists: PiAPI Seedance's `video_urls` validator sniffs the URL
+ * extension and rejects anything that isn't `.mp4`/`.mov`. The Firebase
+ * Storage URL still serves the correct bytes regardless of extension, but
+ * PiAPI won't touch it. Re-uploading in Firebase (instead of PiAPI's
+ * ephemeral store) avoids a CORS block on upload.theapi.app in production,
+ * and Firebase Storage URLs are already known to work as PiAPI references.
+ *
+ * Returns the new https download URL, or throws if fetch/upload fails.
+ */
+export const reuploadUrlToFirebaseStorage = async (
+    url: string,
+    projectId: string,
+    pathPrefix: string
+): Promise<string> => {
+    const user = getCurrentUser();
+    if (!user) throw new Error('Must be signed in to re-upload to Firebase Storage.');
+    if (!url) throw new Error('reuploadUrlToFirebaseStorage: url required');
+
+    console.log(`[Firebase] Re-fetching ${url.split('/').pop()?.split('?')[0]}...`);
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`Failed to fetch URL for re-upload: HTTP ${res.status}`);
+    const blob = await res.blob();
+
+    // Map the actual blob mime to a correct extension. Same table as
+    // uploadBase64Image so the two are consistent.
+    const mime = (blob.type || 'application/octet-stream').toLowerCase();
+    const mimeToExt: Record<string, string> = {
+        'image/png': 'png', 'image/jpeg': 'jpg', 'image/jpg': 'jpg',
+        'image/webp': 'webp', 'image/gif': 'gif',
+        'video/mp4': 'mp4', 'video/quicktime': 'mov',
+        'video/x-matroska': 'mkv', 'video/webm': 'webm',
+        'audio/mpeg': 'mp3', 'audio/mp3': 'mp3',
+        'audio/wav': 'wav', 'audio/x-wav': 'wav',
+    };
+    const ext = mimeToExt[mime] ||
+        (mime.startsWith('video/') ? mime.split('/')[1] || 'mp4'
+            : mime.startsWith('image/') ? mime.split('/')[1] || 'png'
+                : mime.startsWith('audio/') ? mime.split('/')[1] || 'mp3'
+                    : 'bin');
+
+    const id = `${pathPrefix}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}.${ext}`;
+    const storageRef = ref(storage, `users/${user.uid}/projects/${projectId}/${id}`);
+    console.log(`[Firebase] Re-uploading as .${ext} (${Math.round(blob.size / 1024)}KB)...`);
+    await uploadBytes(storageRef, blob);
+    const newUrl = await getDownloadURL(storageRef);
+    console.log(`[Firebase] Re-uploaded → ${newUrl.split('?')[0]}`);
+    return newUrl;
+};
+
+/**
  * Walk through a project and upload all base64 images to Firebase Storage.
  * Replaces base64 data URLs in-place with https:// download URLs.
  * Returns a deep clone with all images as URLs.
  */
+
 const uploadProjectImages = async (uid: string, project: Project): Promise<Project> => {
     // structuredClone is ~2-3x faster than JSON.parse(JSON.stringify(...)) for
     // large base64-heavy projects and handles all JSON-serializable shapes correctly.
