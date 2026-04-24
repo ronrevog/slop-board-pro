@@ -5,6 +5,39 @@ All notable changes to Slop Board Pro are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to semantic versioning where practical.
 
+## [1.4.14] — 2026-04-24
+
+### Fixed — Seedance reference videos rejected by PiAPI ("invalid video url, allowed format: .mp4")
+
+**Two bugs, one symptom.** PiAPI Seedance's `video_urls` validator sniffs the
+URL extension and rejects anything that isn't `.mp4` / `.mov`. We were sending
+it Firebase Storage URLs ending in `.png` — because:
+
+1. `services/firebaseSync.ts > uploadBase64Image` only recognised `image/jpeg`
+   / `image/webp` and defaulted **every other mime** (including
+   `data:video/mp4;…`) to a `.png` file extension when writing to Firebase
+   Storage. Video segments were therefore saved as `…_vseg_0_url_….png` even
+   though the bytes were MP4.
+2. `uploadPiAPIEphemeral` passed http(s) URLs through unchanged, so the bad
+   `.png`-named Firebase URL flowed straight to PiAPI.
+
+Fixes:
+- `uploadBase64Image` now maps every common video/audio/image mime to its
+  correct extension (`video/mp4`→`mp4`, `video/quicktime`→`mov`, etc.) and
+  falls back to `.bin` (not `.png`) for unknown blobs. All *new* video
+  segments will be saved to Firebase Storage with `.mp4` filenames.
+- `uploadPiAPIEphemeral` and `uploadRefsToPiAPI` now take
+  `options.requiredExts` / `options.forceReupload`. The Seedance call site in
+  `ProjectEditor.handleGenerateSeedanceVideo` passes
+  `requiredExts: ['mp4', 'mov']` for `video_urls` and
+  `requiredExts: ['png','jpg','jpeg','webp','gif']` for `image_urls` — any
+  https URL with the wrong extension (e.g. our legacy Firebase `.png`-named
+  videos) is now fetched and re-uploaded through PiAPI's ephemeral store
+  where we control the filename from the blob's mime type.
+
+End result: existing broken projects work immediately (via re-upload),
+and new projects never produce the bad URLs in the first place.
+
 ## [1.4.13] — 2026-04-24
 
 ### Fixed — Hardcoded `v1.4.9` in dashboard UI

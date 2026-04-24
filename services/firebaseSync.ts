@@ -37,8 +37,16 @@ import { dataUrlToBlob } from './imageUtils';
 // ============================================================
 
 /**
- * Upload a single base64 image to Firebase Storage.
- * Returns the download URL.
+ * Upload a single base64 media blob (image OR video OR audio) to Firebase
+ * Storage. Returns the download URL.
+ *
+ * Historically this only looked at image mime types and defaulted everything
+ * else to `.png`, which meant `data:video/mp4;…` payloads were saved with a
+ * `.png` extension. Downstream APIs that sniff file type by extension (e.g.
+ * PiAPI Seedance's `video_urls` validator, which demands `.mp4` / `.mov`)
+ * then reject those URLs as "invalid video url, allowed format: .mp4". We
+ * now map every common video/audio/image mime we care about to its correct
+ * extension, and fall back to `.bin` rather than `.png` for unknown blobs.
  */
 const uploadBase64Image = async (
     uid: string,
@@ -46,14 +54,41 @@ const uploadBase64Image = async (
     imagePath: string,
     base64DataUrl: string
 ): Promise<string> => {
-    const ext = base64DataUrl.startsWith('data:image/jpeg') ? 'jpg'
-        : base64DataUrl.startsWith('data:image/webp') ? 'webp'
-            : 'png';
+    // Pull the `type` (e.g. `video/mp4`) out of the data-URL header.
+    const mimeMatch = base64DataUrl.match(/^data:([^;]+);/);
+    const mime = (mimeMatch?.[1] || '').toLowerCase();
+
+    const mimeToExt: Record<string, string> = {
+        // images
+        'image/png': 'png',
+        'image/jpeg': 'jpg',
+        'image/jpg': 'jpg',
+        'image/webp': 'webp',
+        'image/gif': 'gif',
+        // videos — critical: seedance/PiAPI sniffs extension
+        'video/mp4': 'mp4',
+        'video/quicktime': 'mov',
+        'video/x-matroska': 'mkv',
+        'video/webm': 'webm',
+        // audio
+        'audio/mpeg': 'mp3',
+        'audio/mp3': 'mp3',
+        'audio/wav': 'wav',
+        'audio/x-wav': 'wav',
+    };
+
+    const ext = mimeToExt[mime] ||
+        (mime.startsWith('video/') ? mime.split('/')[1] || 'mp4'
+            : mime.startsWith('image/') ? mime.split('/')[1] || 'png'
+                : mime.startsWith('audio/') ? mime.split('/')[1] || 'mp3'
+                    : 'bin');
+
     const storageRef = ref(storage, `users/${uid}/projects/${projectId}/${imagePath}.${ext}`);
     const blob = dataUrlToBlob(base64DataUrl);
     await uploadBytes(storageRef, blob);
     return getDownloadURL(storageRef);
 };
+
 
 /**
  * Walk through a project and upload all base64 images to Firebase Storage.

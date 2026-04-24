@@ -1642,8 +1642,17 @@ Style: ${project.settings.cinematographer}, shot on ${project.settings.filmStock
 
         console.log(`[PiAPI] Uploading ${uniqueImageRefs.length} image ref(s) + ${seedSettings.referenceVideoUrls?.length || 0} video ref(s)...`);
         const [imgs, vids] = await Promise.all([
-          uploadRefsToPiAPI(uniqueImageRefs, piapiKey, `${shot.id}_img`),
-          uploadRefsToPiAPI(seedSettings.referenceVideoUrls, piapiKey, `${shot.id}_vid`),
+          uploadRefsToPiAPI(uniqueImageRefs, piapiKey, `${shot.id}_img`, {
+            requiredExts: ['png', 'jpg', 'jpeg', 'webp', 'gif'],
+          }),
+          // PiAPI Seedance's `video_urls` validator rejects any URL whose
+          // extension isn't `.mp4` / `.mov`. We historically saved video
+          // segments to Firebase Storage as `.png` (firebaseSync bug), so
+          // force those to be re-uploaded through PiAPI's ephemeral store
+          // where we control the filename.
+          uploadRefsToPiAPI(seedSettings.referenceVideoUrls, piapiKey, `${shot.id}_vid`, {
+            requiredExts: ['mp4', 'mov'],
+          }),
         ]);
         imageUrls = imgs;
         videoUrls = vids.slice(0, 1); // 1 video max

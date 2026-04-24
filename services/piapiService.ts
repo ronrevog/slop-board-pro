@@ -81,21 +81,46 @@ interface PiAPIUploadResponse {
 
 /**
  * Upload a file to PiAPI's ephemeral resource store.
- * Accepts `data:`, `blob:`, or `http(s)://` URLs — http(s) URLs are returned
- * as-is (assumed publicly accessible). Everything else is base64-uploaded.
+ * Accepts `data:`, `blob:`, or `http(s)://` URLs.
+ *
+ * For http(s) URLs: by default we pass them through unchanged (assumed
+ * publicly accessible). If `forceReupload` is true OR `requiredExts` is set
+ * and the URL's extension doesn't match, we fetch the bytes and re-upload so
+ * PiAPI gets a properly-named file. This is critical for PiAPI Seedance's
+ * `video_urls` validator, which sniffs the URL extension and rejects
+ * anything that isn't `.mp4`/`.mov` — we have legacy videos stored in
+ * Firebase Storage with `.png` extensions (an old bug in `firebaseSync.ts`)
+ * that only work via this re-upload path.
  *
  * @throws if the payload exceeds 10 MB or upload fails.
  */
 export const uploadPiAPIEphemeral = async (
     url: string,
     apiKey: string,
-    fileName: string = 'upload'
+    fileName: string = 'upload',
+    options?: { forceReupload?: boolean; requiredExts?: string[] }
 ): Promise<string> => {
     if (!apiKey) throw new Error('PiAPI API key is required for uploads.');
     if (!url) throw new Error('uploadPiAPIEphemeral: url is required');
 
-    // Already public? Pass through.
-    if (url.startsWith('http://') || url.startsWith('https://')) return url;
+    const isHttp = url.startsWith('http://') || url.startsWith('https://');
+
+    // Figure out whether we should re-upload an http(s) URL. We strip query
+    // string when matching the extension so Firebase Storage tokens don't
+    // break the check.
+    const needsReupload = (() => {
+        if (!isHttp) return false;
+        if (options?.forceReupload) return true;
+        if (options?.requiredExts?.length) {
+            const pathOnly = url.split('?')[0].toLowerCase();
+            const ok = options.requiredExts.some(ext => pathOnly.endsWith(`.${ext.toLowerCase()}`));
+            return !ok;
+        }
+        return false;
+    })();
+
+    // Already public and extension is fine? Pass through.
+    if (isHttp && !needsReupload) return url;
 
     // Resolve to a Blob
     let blob: Blob;
@@ -105,9 +130,16 @@ export const uploadPiAPIEphemeral = async (
         const res = await fetch(url);
         if (!res.ok) throw new Error(`Failed to fetch blob URL: HTTP ${res.status}`);
         blob = await res.blob();
+    } else if (isHttp) {
+        // Re-upload path: download from Firebase / wherever, upload to PiAPI.
+        console.log(`[PiAPI] Re-uploading ${url.split('/').pop()?.split('?')[0]} (wrong ext / forced)...`);
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`Failed to fetch http URL for re-upload: HTTP ${res.status}`);
+        blob = await res.blob();
     } else {
         throw new Error(`Unsupported URL scheme for PiAPI upload: ${url.substring(0, 32)}...`);
     }
+
 
     if (blob.size > PIAPI_UPLOAD_MAX_BYTES) {
         throw new Error(
@@ -434,15 +466,23 @@ export const generatePiAPISeedance2 = async (
  * Given a list of URLs that might be any mix of https / data: / blob:, return
  * a new list of public https URLs suitable for `image_urls` / `video_urls`.
  * Uploads only what needs uploading; passes through existing https URLs.
+ *
+ * Pass `options.requiredExts` (e.g. `['mp4', 'mov']`) to force re-upload of
+ * any https URL whose extension doesn't match — needed for PiAPI Seedance's
+ * `video_urls`, which rejects anything that isn't a true `.mp4`/`.mov` URL
+ * (we have legacy Firebase Storage URLs saved with `.png` extensions).
  */
 export const uploadRefsToPiAPI = async (
     urls: string[] | undefined,
     apiKey: string,
-    namePrefix: string
+    namePrefix: string,
+    options?: { requiredExts?: string[]; forceReupload?: boolean }
 ): Promise<string[]> => {
     if (!urls || urls.length === 0) return [];
     const results = await Promise.all(
-        urls.map((u, i) => uploadPiAPIEphemeral(u, apiKey, `${namePrefix}_${i}`))
+        urls.map((u, i) => uploadPiAPIEphemeral(u, apiKey, `${namePrefix}_${i}`, options))
     );
     return results.filter((u): u is string => !!u);
 };
+
+
