@@ -5,6 +5,39 @@ All notable changes to Slop Board Pro are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to semantic versioning where practical.
 
+## [1.4.10] — 2026-04-24
+
+### Changed — Seedance Reference Video now uses the selected Stringout segment
+
+Simplified the Seedance **Reference → Video** / **Fast Reference → Video** UX.
+Previously the card rendered a *separate* "Reference Videos" picker on the right
+panel that listed every video from every other shot in the project, with its own
+multi-select state. That was redundant with the existing Video Stringout on the
+left — users had to hunt through a second picker even after selecting a clip in
+the stringout.
+
+Now:
+
+- The standalone Reference Videos picker is **removed** from `VideoShotCard`.
+- When the Seedance model is a `reference-to-video` variant, the generator simply
+  uses whichever segment is currently selected in the **Video Stringout** on the
+  left (the same one the blue ring highlights) as `referenceVideoUrls: [url]`.
+- A compact "Reference Video: Segment N (from stringout)" indicator replaces the
+  old picker block, mirroring the existing **Wan v2.6** "🎬 Source:" indicator.
+- If no segment is selected (or no segments exist yet), no reference video is
+  sent — the generation falls back to prompt-only.
+
+### Removed
+
+- Unused state in `VideoShotCard`: `showSeedanceRefVideos`,
+  `selectedRefVideoKeys`, `availableRefVideos`, `toggleRefVideo`,
+  `clearRefVideos`, `getSelectedRefVideoUrls`.
+
+The `projectVideos` prop and `ProjectVideoRef` interface are kept for now (still
+passed from `ProjectEditor.tsx`) but are no longer consumed by the Seedance
+section — safe to remove in a later cleanup pass once nothing else depends on
+them.
+
 ## [1.4.9] — 2026-04-23
 
 ### Fixed

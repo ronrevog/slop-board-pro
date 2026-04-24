@@ -39,6 +39,13 @@ interface ProjectEditorProps {
   onSetBackupFile?: () => void;
 }
 
+/** Per-shot live status from the PiAPI poll loop — surfaced in the loading
+ *  overlay so users can see it's queued vs processing vs cancelled. */
+export interface SeedanceLiveStatus {
+  status: string;      // 'pending' | 'staged' | 'processing' | 'downloading video...' etc.
+  startedAt: number;   // Unix ms
+}
+
 export const ProjectEditor: React.FC<ProjectEditorProps> = ({ initialProject, onSave, onBack, backupStatus, onSetBackupFile }) => {
   // Initialize internal state with the passed project
   const [project, setProject] = useState<Project>(() => {
@@ -82,6 +89,34 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ initialProject, on
   // PiAPI key save status — PiAPI doesn't expose a validation endpoint so we
   // just confirm "saved" after the user clicks the button.
   const [piapiKeyStatus, setPiapiKeyStatus] = useState<'idle' | 'saved'>('idle');
+
+  // --- PiAPI Seedance live status + cancellation ---
+  // Live per-shot status surfaced in the VideoShotCard loading overlay.
+  const [seedanceStatuses, setSeedanceStatuses] = useState<Record<string, SeedanceLiveStatus>>({});
+  // AbortControllers for active PiAPI generations so the user can cancel them.
+  const seedanceAbortControllers = React.useRef<Map<string, AbortController>>(new Map());
+
+  const handleCancelSeedance = (shotId: string) => {
+    const controller = seedanceAbortControllers.current.get(shotId);
+    if (controller) {
+      controller.abort();
+      seedanceAbortControllers.current.delete(shotId);
+    }
+    setSeedanceStatuses(prev => {
+      if (!(shotId in prev)) return prev;
+      const { [shotId]: _, ...rest } = prev;
+      return rest;
+    });
+    if (!activeSceneId) return;
+    updateSceneShots(activeSceneId, shots =>
+      shots.map(s => s.id === shotId ? {
+        ...s,
+        isVideoGenerating: false,
+        isExtending: false,
+        videoError: 'Cancelled'
+      } : s)
+    );
+  };
 
   // Auto-populate API keys from localStorage on mount (so keys persist across projects/sessions)
   useEffect(() => {
@@ -1569,6 +1604,14 @@ Style: ${project.settings.cinematographer}, shot on ${project.settings.filmStock
       return;
     }
 
+    // Track abort controller + initial live status for this generation
+    const abortController = new AbortController();
+    seedanceAbortControllers.current.set(shotId, abortController);
+    setSeedanceStatuses(prev => ({
+      ...prev,
+      [shotId]: { status: 'submitting', startedAt: Date.now() },
+    }));
+
     updateSceneShots(activeSceneId, shots =>
       shots.map(s => s.id === shotId ? { ...s, isVideoGenerating: true, videoError: undefined } : s)
     );
@@ -1631,10 +1674,18 @@ Style: ${project.settings.cinematographer}, shot on ${project.settings.filmStock
           imageUrls: imageUrls.length ? imageUrls : undefined,
           videoUrls: videoUrls.length ? videoUrls : undefined,
         },
-        piapiKey
-        // Note: PiAPI status (pending/staged/processing) is logged to the
-        // console by the service itself. During peak hours (09:00-15:00 UTC)
-        // Seedance queues can run into hours per PiAPI's own docs.
+        piapiKey,
+        // onProgress: surface live PiAPI status to the shot's loading overlay.
+        // De-dupe updates — PiAPI reports the same status for many polls in a
+        // row during queue waits, and we don't want a re-render per poll.
+        (status) => {
+          setSeedanceStatuses(prev => {
+            const existing = prev[shotId];
+            if (!existing || existing.status === status) return prev;
+            return { ...prev, [shotId]: { ...existing, status } };
+          });
+        },
+        abortController.signal
       );
 
       const newSegment: VideoSegment = {
@@ -1660,6 +1711,15 @@ Style: ${project.settings.cinematographer}, shot on ${project.settings.filmStock
       updateSceneShots(activeSceneId, shots =>
         shots.map(s => s.id === shotId ? { ...s, isVideoGenerating: false, videoError: errorMessage } : s)
       );
+    } finally {
+      // Always clear the abort controller + live status when the generation
+      // terminates (success, failure, or cancel).
+      seedanceAbortControllers.current.delete(shotId);
+      setSeedanceStatuses(prev => {
+        if (!(shotId in prev)) return prev;
+        const { [shotId]: _, ...rest } = prev;
+        return rest;
+      });
     }
   };
 
@@ -1676,6 +1736,14 @@ Style: ${project.settings.cinematographer}, shot on ${project.settings.filmStock
       );
       return;
     }
+
+    // Track abort controller + initial live status for this generation
+    const abortController = new AbortController();
+    seedanceAbortControllers.current.set(shotId, abortController);
+    setSeedanceStatuses(prev => ({
+      ...prev,
+      [shotId]: { status: 'submitting', startedAt: Date.now() },
+    }));
 
     updateSceneShots(activeSceneId, shots =>
       shots.map(s => s.id === shotId ? { ...s, isExtending: true, videoError: undefined } : s)
@@ -1714,7 +1782,15 @@ Style: ${project.settings.cinematographer}, shot on ${project.settings.filmStock
           resolution,
           imageUrls: [firstFrameUrl],
         },
-        piapiKey
+        piapiKey,
+        (status) => {
+          setSeedanceStatuses(prev => {
+            const existing = prev[shotId];
+            if (!existing || existing.status === status) return prev;
+            return { ...prev, [shotId]: { ...existing, status } };
+          });
+        },
+        abortController.signal
       );
 
       const newSegment: VideoSegment = {
@@ -1740,6 +1816,13 @@ Style: ${project.settings.cinematographer}, shot on ${project.settings.filmStock
       updateSceneShots(activeSceneId, shots =>
         shots.map(s => s.id === shotId ? { ...s, isExtending: false, videoError: errorMessage } : s)
       );
+    } finally {
+      seedanceAbortControllers.current.delete(shotId);
+      setSeedanceStatuses(prev => {
+        if (!(shotId in prev)) return prev;
+        const { [shotId]: _, ...rest } = prev;
+        return rest;
+      });
     }
   };
 
@@ -2473,6 +2556,8 @@ TIP: Select (highlight) a portion of text and click 'Analyze Scene' to analyze o
                       onDeleteSegment={handleDeleteVideoSegment}
                       synthesizePrompt={synthesizeVideoPrompt}
                       projectVideos={allProjectVideos}
+                      seedanceLiveStatus={seedanceStatuses[shot.id]}
+                      onCancelSeedance={handleCancelSeedance}
                     />
                   ))}
                 </div>

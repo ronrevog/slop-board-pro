@@ -232,7 +232,8 @@ export const generatePiAPISeedance2Omni = async (
 export const generatePiAPISeedance2 = async (
     settings: PiAPISeedance2GenerateSettings,
     apiKey: string,
-    onProgress?: (status: string, position?: number) => void
+    onProgress?: (status: string, position?: number) => void,
+    abortSignal?: AbortSignal
 ): Promise<string> => {
     if (!apiKey) {
         throw new Error('PiAPI API key is required. Add one in Project Settings.');
@@ -319,20 +320,48 @@ export const generatePiAPISeedance2 = async (
     console.log(`[PiAPI] Task submitted — id=${taskId}`);
 
     // ---- Poll ----
-    const POLL_INTERVAL_MS = 5000;
-    const POLL_TIMEOUT_MS = 20 * 60 * 1000; // 20 min max
+    // PiAPI's own docs say peak-hour queue can extend to "several hours", so
+    // 60 min client-side is a pragmatic upper bound.
+    const POLL_INTERVAL_ACTIVE_MS = 5000;   // used for pending/processing
+    const POLL_INTERVAL_QUEUED_MS = 15000;  // slow down while in staged queue
+    const POLL_TIMEOUT_MS = 60 * 60 * 1000; // 60 min max
     const startedAt = Date.now();
+    let lastStatus: string | null = null;
 
     // eslint-disable-next-line no-constant-condition
     while (true) {
-        if (Date.now() - startedAt > POLL_TIMEOUT_MS) {
-            throw new Error('PiAPI task timed out after 20 minutes.');
+        if (abortSignal?.aborted) {
+            throw new Error('Cancelled');
         }
-        await new Promise(r => setTimeout(r, POLL_INTERVAL_MS));
+        if (Date.now() - startedAt > POLL_TIMEOUT_MS) {
+            throw new Error('PiAPI task timed out after 60 minutes.');
+        }
+
+        // Adaptive poll interval: 15s while PiAPI has the task queued (staged),
+        // 5s while it's actively pending/processing. Less network chatter on
+        // long peak-hour waits.
+        const interval =
+            lastStatus === 'staged' ? POLL_INTERVAL_QUEUED_MS : POLL_INTERVAL_ACTIVE_MS;
+        await new Promise<void>((resolve, reject) => {
+            const t = setTimeout(() => {
+                abortSignal?.removeEventListener('abort', onAbort);
+                resolve();
+            }, interval);
+            const onAbort = () => {
+                clearTimeout(t);
+                reject(new Error('Cancelled'));
+            };
+            abortSignal?.addEventListener('abort', onAbort, { once: true });
+        });
+
+        if (abortSignal?.aborted) {
+            throw new Error('Cancelled');
+        }
 
         const pollRes = await fetch(`${PIAPI_TASK_URL}/${taskId}`, {
             method: 'GET',
             headers: { 'X-API-Key': apiKey.trim() },
+            signal: abortSignal,
         });
         if (!pollRes.ok) {
             const txt = await pollRes.text().catch(() => '');
@@ -341,9 +370,12 @@ export const generatePiAPISeedance2 = async (
         const pollBody = (await pollRes.json()) as PiAPITaskResponse;
         const status = pollBody.data?.status || '';
         const normalized = status.toLowerCase();
+        lastStatus = normalized;
 
         console.log(`[PiAPI] task=${taskId} status=${status}`);
-        onProgress?.(`PiAPI Seedance: ${status}`);
+        // Only fire progress when status actually transitions — PiAPI may
+        // report the same status dozens of times in a row during queue waits.
+        onProgress?.(normalized);
 
         if (normalized === 'completed') {
             const videoUrl = pollBody.data?.output?.video;
