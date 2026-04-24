@@ -5,6 +5,35 @@ All notable changes to Slop Board Pro are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to semantic versioning where practical.
 
+## [1.4.12] — 2026-04-24
+
+### Fixed — Stale bundle after Firebase deploy (root cause of "same error after redeploy")
+
+Firebase Hosting was serving `index.html` with its default 1-hour browser
+cache and no `Cache-Control` headers of our own. Result: redeploying the app
+didn't actually change anything in a user's tab for up to an hour, because
+the cached `index.html` kept pointing at the *old* hashed bundle.
+
+- `firebase.json` now emits explicit cache headers:
+  - `/index.html` and `/` → `Cache-Control: no-cache, no-store, must-revalidate`
+    (so the HTML is always refetched and the `<script src>` points at the
+    newest hashed bundle).
+  - `/assets/**` → `Cache-Control: public, max-age=31536000, immutable`
+    (hashed files are content-addressed, so caching them forever is safe).
+
+### Added — Visible build version for cache-debug sanity checks
+
+- `vite.config.ts` now reads `package.json#version` and injects two build-time
+  constants into the bundle: `__APP_VERSION__` and `__APP_BUILD_TIME__`.
+- `index.tsx` logs them on boot in green:
+  `[Slop Board Pro] v1.4.12 · built 2026-04-24T…Z`, and also pins them on
+  `window.__SLOP_BOARD_VERSION__` / `window.__SLOP_BOARD_BUILD_TIME__` for
+  ad-hoc DevTools checks.
+
+Together these make it immediately obvious whether a browser is on the latest
+build after a deploy, instead of having to hunt through the bundle filename
+hash in stack traces.
+
 ## [1.4.11] — 2026-04-24
 
 ### Changed — Surface full PiAPI error responses
