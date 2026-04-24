@@ -6,6 +6,11 @@ import { Plus, Film, Trash2, Calendar, Clapperboard, LayoutGrid, Download, Uploa
 import { Button } from './Button';
 import { exportProjectsToFile, importProjectsFromFile, exportSingleProjectToFile } from '../services/storage';
 
+// Build-time constant injected by Vite (`define` in vite.config.ts) from
+// package.json#version. Displayed in the dashboard header/footer so there is
+// a single source of truth for the version string — no more hand-bumping.
+declare const __APP_VERSION__: string;
+
 interface BackupStatus {
   isActive: boolean;
   lastBackupTime: number | null;
@@ -156,7 +161,7 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
           <div className="space-y-2">
             <div className="flex items-center gap-3">
               <img src="/img/slopboard_logo_text.png" alt="Slop Board" className="h-12 w-auto" />
-              <span className="text-xs font-normal text-neutral-600">v1.4.9</span>
+              <span className="text-xs font-normal text-neutral-600">v{__APP_VERSION__}</span>
             </div>
             <p className="text-neutral-500 uppercase tracking-widest text-sm font-medium">Cinematic Project Manager</p>
           </div>
@@ -338,7 +343,7 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
 
       {/* Footer */}
       <div className="max-w-7xl mx-auto mt-12 pt-6 border-t border-neutral-800/50 text-center text-neutral-600 text-sm">
-        Version 1.4.9
+        Version {__APP_VERSION__}
       </div>
     </div>
   );

@@ -5,6 +5,16 @@ All notable changes to Slop Board Pro are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to semantic versioning where practical.
 
+## [1.4.13] — 2026-04-24
+
+### Fixed — Hardcoded `v1.4.9` in dashboard UI
+
+`ProjectDashboard.tsx` had the version string hardcoded in two spots (header
+badge next to the logo + footer), which is what the user was seeing instead
+of the actual build version. Both now read the Vite-injected
+`__APP_VERSION__` constant so they always match `package.json#version`
+automatically on every build.
+
 ## [1.4.12] — 2026-04-24
 
 ### Fixed — Stale bundle after Firebase deploy (root cause of "same error after redeploy")
