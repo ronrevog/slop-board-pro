@@ -5,6 +5,30 @@ All notable changes to Slop Board Pro are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to semantic versioning where practical.
 
+## [1.4.11] — 2026-04-24
+
+### Changed — Surface full PiAPI error responses
+
+When PiAPI rejects a Seedance task (e.g. HTTP 500 on `omni_reference` with a
+video reference), we previously truncated the raw response body at 300 chars in
+the thrown error, which chopped off the actual `data.error.message` field
+PiAPI returns. This made it impossible to tell whether the failure was bad
+format, duration over 15.4 s, inaccessible ephemeral URL, etc.
+
+- `generatePiAPISeedance2` now parses the PiAPI response JSON and surfaces
+  `data.error.message` / `error.message` / `message` at the front of the thrown
+  error string.
+- Raw response text is now logged to the console as
+  `[PiAPI] submit failed raw response: …` and the fallback truncation is
+  increased from 300 → 2000 chars so the user can see the actual cause.
+- Same treatment applied to the non-2xx-code-but-200-http fallback path.
+
+### Fixed — Generic "no task_id" message on Seedance failures
+
+When PiAPI returned HTTP 200 with `code !== 200`, we threw a generic
+`no task_id` error even when a useful `data.error.message` was available. Now
+that message is preferred.
+
 ## [1.4.10] — 2026-04-24
 
 ### Changed — Seedance Reference Video now uses the selected Stringout segment

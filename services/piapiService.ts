@@ -308,13 +308,30 @@ export const generatePiAPISeedance2 = async (
 
     if (!submitRes.ok) {
         const txt = await submitRes.text().catch(() => '');
-        throw new Error(`PiAPI submit failed: HTTP ${submitRes.status} ${txt.substring(0, 300)}`);
+        // Try to pull out the most useful error detail from PiAPI's response
+        // shape: { code, message, data: { error: { message } } }. If we can't
+        // parse it cleanly, fall back to a longer raw-text slice so the user
+        // can actually see what went wrong (was 300 chars, now 2000).
+        let detail = txt.substring(0, 2000);
+        try {
+            const parsed = JSON.parse(txt);
+            const apiMsg =
+                parsed?.data?.error?.message ||
+                parsed?.error?.message ||
+                parsed?.message;
+            if (apiMsg) detail = `${apiMsg} — ${txt.substring(0, 1500)}`;
+        } catch { /* keep raw text */ }
+        console.error('[PiAPI] submit failed raw response:', txt);
+        throw new Error(`PiAPI submit failed: HTTP ${submitRes.status} ${detail}`);
     }
 
     const submitBody = (await submitRes.json()) as PiAPITaskResponse;
     if (submitBody.code !== 200 || !submitBody.data?.task_id) {
-        throw new Error(`PiAPI submit failed: ${submitBody.message || 'no task_id'}`);
+        const apiMsg =
+            submitBody.data?.error?.message || submitBody.message || 'no task_id';
+        throw new Error(`PiAPI submit failed: ${apiMsg}`);
     }
+
 
     const taskId = submitBody.data.task_id;
     console.log(`[PiAPI] Task submitted — id=${taskId}`);
