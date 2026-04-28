@@ -16,6 +16,15 @@ const getAspectRatioValue = (ratio: string): string => {
   return map[ratio] || '16/9';
 };
 
+// Decide whether the ratio is taller than it is wide (portrait).
+// Portrait ratios make the card explode vertically when sized by full column
+// width, so we drive sizing from a capped height instead.
+const isPortraitRatio = (ratio: string): boolean => {
+  const v = getAspectRatioValue(ratio);
+  const [w, h] = v.split('/').map(Number);
+  return Number.isFinite(w) && Number.isFinite(h) && h > w;
+};
+
 interface ShotCardProps {
   shot: Shot;
   sceneName?: string;
@@ -149,11 +158,22 @@ export const ShotCard: React.FC<ShotCardProps> = ({
 
   const getSpeakerName = (id: string) => allCharacters.find(c => c.id === id)?.name || "Unknown";
 
+  // Compute the visual area sizing once per render.
+  // Portrait ratios (9:16, 2:3, 3:4, 4:5) are capped by HEIGHT so the card
+  // doesn't explode vertically when the column is wide.
+  // Landscape / square ratios fill column WIDTH (with a safety max-height).
+  const _ratio = aspectRatio || '16:9';
+  const _ratioValue = getAspectRatioValue(_ratio);
+  const _portrait = isPortraitRatio(_ratio);
+  const _visualStyle: React.CSSProperties = _portrait
+    ? { aspectRatio: _ratioValue, height: 'min(60vh, 560px)', width: 'auto', maxWidth: '100%' }
+    : { aspectRatio: _ratioValue, width: '100%', maxHeight: 'min(70vh, 720px)' };
+
   return (
     <div className="group bg-neutral-900 border border-neutral-800 rounded-lg overflow-hidden flex flex-col h-full hover:border-neutral-600 transition-colors shadow-lg">
 
-      {/* 1. VISUAL AREA — dynamic aspect ratio */}
-      <div className="relative bg-black w-full overflow-hidden" style={{ aspectRatio: getAspectRatioValue(aspectRatio || '16:9') }}>
+      {/* 1. VISUAL AREA — dynamic aspect ratio (height-capped for portrait) */}
+      <div className={`relative bg-black overflow-hidden ${_portrait ? 'mx-auto' : 'w-full'}`} style={_visualStyle}>
 
         {/* Aspect Ratio Selector — bottom-left of image window */}
         {onAspectRatioChange && (

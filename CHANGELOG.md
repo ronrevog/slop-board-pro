@@ -5,6 +5,25 @@ All notable changes to Slop Board Pro are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to semantic versioning where practical.
 
+## [1.4.16] — 2026-04-27
+
+### Fixed — Storyboard preview image was gigantic for portrait aspect ratios
+
+Tall ratios (9:16, 2:3, 3:4, 4:5) were sized by the column's full width through
+CSS `aspect-ratio`, which made each shot card explode vertically (often
+exceeding the viewport on a single shot). The card's image area is now sized
+adaptively in `components/ShotCard.tsx`:
+
+- **Portrait ratios** drive sizing from a capped HEIGHT
+  (`min(60vh, 560px)`) with `width: auto` so the frame stays within the
+  viewport and is centered (`mx-auto`) inside the card column.
+- **Landscape / square ratios** keep the existing `width: 100%` behavior, but
+  now also carry a safety `max-height` of `min(70vh, 720px)` for very wide
+  layouts.
+
+A new `isPortraitRatio()` helper parses the ratio string (e.g. `9/16`) to pick
+the right strategy. No behavior change for 16:9 in normal grid widths.
+
 ## [1.4.15] — 2026-04-24
 
 ### Fixed — CORS block on PiAPI ephemeral uploads in production
