@@ -5,6 +5,31 @@ All notable changes to Slop Board Pro are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to semantic versioning where practical.
 
+## [1.4.17] — 2026-04-28
+
+### Fixed — Square / landscape ratios (1:1, 3:2, 4:3, 16:9, 21:9) still misbehaving after v1.4.16
+
+v1.4.16 split the visual area into two sizing branches (portrait vs.
+landscape). The portrait branch worked, but landscape/square still broke
+because `width: 100%` + `max-height: …` makes CSS cap the height while
+leaving width unchanged, which silently breaks `aspect-ratio` and combined
+with `object-cover` produced cropped/stretched frames at large column widths.
+
+v1.4.17 replaces the two-branch logic with a **single universal sizing
+strategy** in `components/ShotCard.tsx`:
+
+- Outer visual box: `aspect-ratio: <ratio>; width: 100%; max-height: min(60vh, 560px);`
+  on every ratio. The box's outer shape may not match the picked ratio when
+  max-height clamps it — that's fine because:
+- The image now uses **`object-contain`** (was `object-cover`) and fills the
+  box absolutely positioned. The picture's true proportions are always
+  preserved, with letterboxing against the existing black background when
+  the box's shape doesn't match. Works identically for 1:1, 3:2, 4:3,
+  16:9, 21:9, 9:16, 2:3, 3:4, 4:5, 5:4, 2.39:1, etc.
+
+The dedicated `isPortraitRatio()` helper from v1.4.16 is gone — no longer
+needed.
+
 ## [1.4.16] — 2026-04-27
 
 ### Fixed — Storyboard preview image was gigantic for portrait aspect ratios
@@ -23,6 +48,9 @@ adaptively in `components/ShotCard.tsx`:
 
 A new `isPortraitRatio()` helper parses the ratio string (e.g. `9/16`) to pick
 the right strategy. No behavior change for 16:9 in normal grid widths.
+
+> **Note:** The portrait fix worked, but the landscape/square half of this
+> change was incorrect — see `[1.4.17]` above for the fix.
 
 ## [1.4.15] — 2026-04-24
 
