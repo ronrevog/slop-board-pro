@@ -5,6 +5,29 @@ All notable changes to Slop Board Pro are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to semantic versioning where practical.
 
+## [1.4.18] — 2026-04-28
+
+### Fixed — Revert v1.4.17's universal `object-contain` change (broke layout in production)
+
+v1.4.17 tried to unify all ratios under one `aspect-ratio + width: 100% + max-height + object-contain` strategy. In practice that broke the
+storyboard board view — the absolutely-positioned image disagreed with the
+flex-column card layout and the dropdown ratio change appeared to do nothing
+visually.
+
+v1.4.18 reverts the cards to **the v1.4.16 portrait fix** for portrait ratios
+**and the original pre-1.4.16 behavior** for landscape / square ratios:
+
+- **Portrait (9:16, 2:3, 3:4, 4:5):** sized by height
+  (`min(60vh, 560px)`) with `width: auto`, centered with `mx-auto`-style
+  inline margins. (This branch is the one the user confirmed works.)
+- **Landscape / square (1:1, 3:2, 4:3, 16:9, 21:9, 2.39:1, 5:4):** the
+  original `width: 100% + aspect-ratio` with the image as `w-full h-full
+  object-cover`. No `max-height` interference.
+
+Net: storyboard renders as it did before v1.4.16 for landscape ratios, **plus**
+the v1.4.16 portrait fix is preserved. The dropdown ratio selector triggers
+the visible reshape on every card immediately.
+
 ## [1.4.17] — 2026-04-28
 
 ### Fixed — Square / landscape ratios (1:1, 3:2, 4:3, 16:9, 21:9) still misbehaving after v1.4.16

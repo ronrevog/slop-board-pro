@@ -16,6 +16,16 @@ const getAspectRatioValue = (ratio: string): string => {
   return map[ratio] || '16/9';
 };
 
+// Portrait ratios are taller than wide — those are the ones that explode
+// vertically when we drive sizing from the column's full width. We size
+// those by HEIGHT instead. Everything else (1:1, 3:2, 4:3, 16:9, 21:9,
+// 2.39:1, etc.) keeps the original `width: 100% + aspect-ratio` behavior.
+const isPortraitRatio = (ratio: string): boolean => {
+  const v = (ratio || '16:9').replace(':', '/');
+  const [w, h] = v.split('/').map(Number);
+  return Number.isFinite(w) && Number.isFinite(h) && h > w;
+};
+
 
 interface ShotCardProps {
   shot: Shot;
@@ -151,26 +161,35 @@ export const ShotCard: React.FC<ShotCardProps> = ({
   const getSpeakerName = (id: string) => allCharacters.find(c => c.id === id)?.name || "Unknown";
 
   // Compute the visual area sizing once per render.
-  // Universal sizing strategy: the outer box fills the column width and is
-  // height-capped at min(60vh, 560px). The inner image uses `object-contain`
-  // (instead of object-cover) so the picture's true aspect ratio is preserved
-  // — letterboxed against the black background when the box's shape doesn't
-  // match the picked aspect ratio. This keeps every ratio (1:1, 3:2, 4:3,
-  // 16:9, 9:16, 21:9, etc.) at a sane on-screen size while still showing the
-  // generated image at its real proportions.
+  // - Landscape / square ratios (1:1, 3:2, 4:3, 16:9, 21:9, 2.39:1, 5:4):
+  //   the original behavior — `width: 100%` + `aspect-ratio`. The image uses
+  //   `object-cover` and fills the box. No max-height interference (which
+  //   silently broke aspect-ratio in v1.4.16).
+  // - Portrait ratios (9:16, 2:3, 3:4, 4:5): drive sizing from a capped
+  //   HEIGHT instead, so a tall ratio in a wide column doesn't explode the
+  //   card's height past the viewport.
   const _ratio = aspectRatio || '16:9';
   const _ratioValue = getAspectRatioValue(_ratio);
-  const _visualStyle: React.CSSProperties = {
-    aspectRatio: _ratioValue,
-    width: '100%',
-    maxHeight: 'min(60vh, 560px)',
-  };
+  const _portrait = isPortraitRatio(_ratio);
+  const _visualStyle: React.CSSProperties = _portrait
+    ? {
+      aspectRatio: _ratioValue,
+      height: 'min(60vh, 560px)',
+      width: 'auto',
+      maxWidth: '100%',
+      marginLeft: 'auto',
+      marginRight: 'auto',
+    }
+    : {
+      aspectRatio: _ratioValue,
+      width: '100%',
+    };
 
   return (
     <div className="group bg-neutral-900 border border-neutral-800 rounded-lg overflow-hidden flex flex-col h-full hover:border-neutral-600 transition-colors shadow-lg">
 
-      {/* 1. VISUAL AREA — dynamic aspect ratio, height-capped, image letterboxed */}
-      <div className="relative bg-black overflow-hidden w-full" style={_visualStyle}>
+      {/* 1. VISUAL AREA — dynamic aspect ratio (height-capped only for portrait) */}
+      <div className="relative bg-black overflow-hidden" style={_visualStyle}>
 
         {/* Aspect Ratio Selector — bottom-left of image window */}
         {onAspectRatioChange && (
@@ -193,7 +212,7 @@ export const ShotCard: React.FC<ShotCardProps> = ({
           <img
             src={shot.imageUrl}
             alt={`Shot ${shot.number}`}
-            className="absolute inset-0 w-full h-full object-contain"
+            className="w-full h-full object-cover"
           />
         ) : (
           /* FIXED: absolute inset-0 forces this to fill the aspect-video container and center properly */
