@@ -5,7 +5,38 @@ All notable changes to Slop Board Pro are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to semantic versioning where practical.
 
+## [1.4.20] — 2026-05-04
+
+### Fixed — Strict Likeness Lock was being out-voted by trailing references
+
+User reported a Strict-Likeness-ON shot of "Ron F" rendering as a completely
+different older bearded man on a motorcycle. Root cause: even with the lock
+on, `generateShotImage` and `alterShotImage` were still appending **adjacent
+scene shots** (and, in alter mode, the start image) **after** the locked
+character portrait. Gemini's image-grounding weights the *most recently seen*
+face most heavily for identity, so the trailing references were silently
+overriding the lock.
+
+- `generateShotImage` (no-reference branch): when `strictLikeness` is on AND
+  there's an active character portrait, the entire adjacent-shot injection
+  block is now **skipped**. Location image + character portrait are enough
+  for continuity in strict mode.
+- `alterShotImage`: same skip rule applied to its adjacent-shot block.
+- Both functions now also **re-inject the locked character portrait one more
+  time at the very end of the parts array** with a `🔒 FINAL_LIKENESS_REMINDER`
+  label, guaranteeing the last face Gemini sees is the locked one — not the
+  location image, not a director ref photo, not the (drifted) start image.
+
+In `alterShotImage` the start image still comes after the initial
+`STRICT_LIKENESS_LOCK` injection (so framing/composition is preserved), but
+the trailing reminder pins identity back to the portrait.
+
+Net behaviour: with Strict Likeness ON and a character portrait set, the
+first AND last things the model sees about that character are the locked
+portrait — making it nearly impossible to anchor identity to anything else.
+
 ## [1.4.19] — 2026-05-01
+
 
 ### Added — **Strict Likeness Lock** toggle on every Shot Card
 

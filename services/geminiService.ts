@@ -1283,23 +1283,50 @@ Do NOT create a different room - use THIS room.`
       });
 
       // 3. Inject Adjacent Scene Shots for visual continuity (filtered by character overlap)
-      const adjacentShots = getAdjacentShotsWithImages(shot, allShots, hasUserRefPhotos ? 2 : 5);
-      if (adjacentShots.length > 0) {
-        adjacentShots.forEach(({ shot: adjShot, environmentOnly }, idx) => {
+      // 🔒 STRICT LIKENESS: when on AND we have a locked character portrait, DROP
+      // adjacent shots entirely. They're the #1 source of face contamination —
+      // Gemini tends to anchor identity to the most-recently-seen face, so
+      // trailing adjacent shots out-vote the leading character portrait. With a
+      // strong portrait + location image, we have enough continuity already.
+      const skipAdjacentForStrict = strictLikeness && hasActiveCharPortrait;
+      if (!skipAdjacentForStrict) {
+        const adjacentShots = getAdjacentShotsWithImages(shot, allShots, hasUserRefPhotos ? 2 : 5);
+        if (adjacentShots.length > 0) {
+          adjacentShots.forEach(({ shot: adjShot, environmentOnly }, idx) => {
+            parts.push({
+              inlineData: {
+                mimeType: getMimeType(adjShot.imageUrl!),
+                data: stripBase64Header(adjShot.imageUrl!)
+              }
+            });
+            parts.push({
+              text: environmentOnly
+                ? `REFERENCE_ENVIRONMENT_${idx + 1}: Nearby Shot #${adjShot.number} — use ONLY for color grade, lighting, and environment continuity. IGNORE all people/characters in this image — they are NOT in this shot.`
+                : `REFERENCE_ADJACENT_SHOT_${idx + 1}: This is nearby Shot #${adjShot.number} from the same scene.
+Maintain visual continuity: same color grade, lighting, environment details, and character appearances as this shot.`
+            });
+          });
+        }
+      }
+
+      // 🔒 STRICT LIKENESS: re-inject the character portrait ONE MORE TIME just
+      // before the main prompt. Gemini weights the LAST image references most
+      // heavily for identity, so we want the last face it sees to be the
+      // locked portrait, not a location image or director ref photo.
+      if (strictLikeness && hasActiveCharPortrait) {
+        activeCharacters.filter(c => c.imageUrl).slice(0, 5).forEach(char => {
           parts.push({
             inlineData: {
-              mimeType: getMimeType(adjShot.imageUrl!),
-              data: stripBase64Header(adjShot.imageUrl!)
+              mimeType: getMimeType(char.imageUrl!),
+              data: stripBase64Header(char.imageUrl!)
             }
           });
           parts.push({
-            text: environmentOnly
-              ? `REFERENCE_ENVIRONMENT_${idx + 1}: Nearby Shot #${adjShot.number} — use ONLY for color grade, lighting, and environment continuity. IGNORE all people/characters in this image — they are NOT in this shot.`
-              : `REFERENCE_ADJACENT_SHOT_${idx + 1}: This is nearby Shot #${adjShot.number} from the same scene.
-Maintain visual continuity: same color grade, lighting, environment details, and character appearances as this shot.`
+            text: `🔒 FINAL_LIKENESS_REMINDER: This is "${char.name}". This is the LAST face reference you must consider — anchor the rendered character's identity to THIS portrait specifically. Ignore any face from other reference images.`
           });
         });
       }
+
 
       // Add main prompt for normal generation
       parts.push({ text: mainPromptText });
@@ -1545,21 +1572,43 @@ You MUST closely reproduce the visual qualities, composition, subject matter, st
   }
 
   // 5. Inject Adjacent Scene Shots for continuity (filtered by character overlap)
-  const alterExcludeIds = referenceShot ? [referenceShot.id] : [];
-  const alterAdjacentShots = getAdjacentShotsWithImages(shot, allShots, hasAlterUserRefPhotos ? 1 : 3, alterExcludeIds);
-  alterAdjacentShots.forEach(({ shot: adjShot, environmentOnly }, idx) => {
-    parts.push({
-      inlineData: {
-        mimeType: getMimeType(adjShot.imageUrl!),
-        data: stripBase64Header(adjShot.imageUrl!)
-      }
+  // 🔒 STRICT LIKENESS: when on AND we have a locked character portrait, DROP
+  // adjacent shots entirely. They're the #1 source of face contamination.
+  const alterSkipAdjacentForStrict = alterStrictLikeness && alterHasActiveCharPortrait;
+  if (!alterSkipAdjacentForStrict) {
+    const alterExcludeIds = referenceShot ? [referenceShot.id] : [];
+    const alterAdjacentShots = getAdjacentShotsWithImages(shot, allShots, hasAlterUserRefPhotos ? 1 : 3, alterExcludeIds);
+    alterAdjacentShots.forEach(({ shot: adjShot, environmentOnly }, idx) => {
+      parts.push({
+        inlineData: {
+          mimeType: getMimeType(adjShot.imageUrl!),
+          data: stripBase64Header(adjShot.imageUrl!)
+        }
+      });
+      parts.push({
+        text: environmentOnly
+          ? `REFERENCE_ENVIRONMENT_${idx + 1}: Nearby Shot #${adjShot.number} — use ONLY for color grade, lighting, and environment continuity. IGNORE all people/characters in this image.`
+          : `REFERENCE_ADJACENT_SHOT_${idx + 1}: Nearby Shot #${adjShot.number} — maintain visual continuity.`
+      });
     });
-    parts.push({
-      text: environmentOnly
-        ? `REFERENCE_ENVIRONMENT_${idx + 1}: Nearby Shot #${adjShot.number} — use ONLY for color grade, lighting, and environment continuity. IGNORE all people/characters in this image.`
-        : `REFERENCE_ADJACENT_SHOT_${idx + 1}: Nearby Shot #${adjShot.number} — maintain visual continuity.`
+  }
+
+  // 🔒 STRICT LIKENESS: re-inject the character portrait ONE MORE TIME just
+  // before the main prompt so the LAST face Gemini sees is the locked portrait.
+  if (alterStrictLikeness && alterHasActiveCharPortrait) {
+    activeCharacters.filter(c => c.imageUrl).slice(0, 5).forEach(char => {
+      parts.push({
+        inlineData: {
+          mimeType: getMimeType(char.imageUrl!),
+          data: stripBase64Header(char.imageUrl!)
+        }
+      });
+      parts.push({
+        text: `🔒 FINAL_LIKENESS_REMINDER: This is "${char.name}". This is the LAST face reference you must consider — anchor the rendered character's identity to THIS portrait. Ignore any face from the start image or other references.`
+      });
     });
-  });
+  }
+
 
   // Check if using Panavision C-Series Anamorphic lens
   const isAnamorphicLens = settings.lens.startsWith("Panavision C-Series");
