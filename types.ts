@@ -178,6 +178,17 @@ export interface Shot {
   referenceImages?: string[]; // Base64 reference photos uploaded by user for visual consistency
   sceneReferenceImage?: string; // Base64 — background/environment to place the character into
   characterReferenceImage?: string; // Base64 — character photo to composite into the scene reference
+  /**
+   * Strict Likeness Lock. When true (or undefined — treated as true so existing
+   * projects automatically opt in), Gemini is told the character's face / bone
+   * structure / eye color / hairline / skin tone are non-negotiable, the
+   * character portrait is hoisted to the front of the multimodal `parts` array
+   * (Gemini weights earlier images more heavily), and director Ref Photos are
+   * demoted from "highest priority" to "style/mood only — do not change the
+   * character's face." Disable for stylized / age-changed renders.
+   */
+  strictLikeness?: boolean;
+
   imageUrl?: string; // Base64
   imageHistory?: ImageHistoryEntry[]; // Version history of images
   videoUrl?: string; // Base64 or Blob URL

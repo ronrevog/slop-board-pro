@@ -866,6 +866,12 @@ export const generateShotImage = async (
   const activeLocation = allLocations.find(l => l.id === shot.locationId);
   const referenceShot = shot.referenceShotId ? allShots.find(s => s.id === shot.referenceShotId) : null;
 
+  // Strict Likeness Lock — see Shot.strictLikeness in types.ts.
+  // Default = ON (undefined treated as true) so existing projects automatically
+  // get the stronger character-identity behaviour.
+  const strictLikeness = shot.strictLikeness !== false;
+  const hasActiveCharPortrait = activeCharacters.some(c => c.imageUrl);
+
   // Build Text Context - ONLY include characters and locations chosen for this shot
   // This prevents Gemini from getting confused by irrelevant references
   let textContext = "";
@@ -889,7 +895,28 @@ export const generateShotImage = async (
     textContext += '\n';
   }
 
+  // Strict Likeness clause — added to the main prompt only when:
+  //  (1) strict mode is on for this shot, AND
+  //  (2) there is at least one active character with a portrait image to lock to.
+  // We do NOT add the clause when there's no portrait, because Gemini would have
+  // nothing to "lock" against and the wording would just confuse it.
+  const likenessLockClause = (strictLikeness && hasActiveCharPortrait)
+    ? `
+    =============================================
+    🔒 LIKENESS LOCK (STRICT)
+    =============================================
+    The character's face, bone structure, eye color, hairline, and skin tone in
+    REFERENCE_CHARACTER_IN_SHOT are NON-NEGOTIABLE. You may change pose,
+    expression, lighting, wardrobe context, and framing only. Do NOT interpolate,
+    age, stylize, or "improve" the face. If a director-supplied DIRECTOR_REFERENCE_PHOTO
+    contradicts the character portrait on facial identity, the character portrait
+    WINS — use the director photo only for style, mood, color, composition, and
+    subject matter, never for the character's face/identity.
+    `
+    : "";
+
   // Build Dialogue Context for facial expressions/mouth shape
+
   let dialogueContext = "";
   if (shot.dialogueLines && shot.dialogueLines.length > 0) {
     dialogueContext = "\nDIALOGUE (Characters may be speaking/reacting):\n";
@@ -985,7 +1012,9 @@ export const generateShotImage = async (
     ${isAnamorphicLens ? '6. Apply classic anamorphic lens characteristics: oval bokeh, blue horizontal flares, and cinematic depth.' : ''}
     
     ⚠️ CHARACTER EXCLUSION RULE: ONLY the characters listed above under "CHARACTERS IN THIS SHOT" should appear as people in the generated image. Do NOT add any other people, faces, or figures from reference images. If an adjacent reference shot shows different characters, IGNORE those people entirely — use the reference ONLY for color grade and environment.
+    ${likenessLockClause}
   `;
+
 
   const targetRatio = mapAspectRatio(settings.aspectRatio);
 
@@ -1074,7 +1103,47 @@ CRITICAL: This must look like a DIFFERENT CAMERA ANGLE of the SAME SCENE - not a
       const hasComposeRefs = !!(shot.sceneReferenceImage || shot.characterReferenceImage);
       const hasFullCompose = !!(shot.sceneReferenceImage && shot.characterReferenceImage);
 
+      // 🔒 STRICT LIKENESS — when on, inject the chosen character portrait(s)
+      // FIRST so Gemini weights them more heavily than any director ref photo
+      // that might follow. The same character images are injected later in the
+      // standard slot too, but appearing earlier is what actually anchors
+      // identity. We still re-inject them in step 3 below so the standard
+      // prompt labels remain in place.
+      if (strictLikeness && hasActiveCharPortrait) {
+
+        const strictChars = activeCharacters.filter(c => c.imageUrl).slice(0, 5);
+        strictChars.forEach(char => {
+          parts.push({
+            inlineData: {
+              mimeType: getMimeType(char.imageUrl!),
+              data: stripBase64Header(char.imageUrl!)
+            }
+          });
+          parts.push({
+            text: `🔒 STRICT_LIKENESS_LOCK_${char.name}: This is "${char.name}". This portrait is the
+NON-NEGOTIABLE source of facial identity for this character — face, bone
+structure, eye color, hairline, skin tone. Any director reference photo or
+adjacent shot that follows MUST yield to this portrait on questions of
+character identity. Use the other references for style, mood, color,
+composition, and subject matter only.`
+          });
+          const selectedTurnarounds = (char.turnaroundImages || []).filter(t => t.isSelected);
+          selectedTurnarounds.forEach((t, tIdx) => {
+            parts.push({
+              inlineData: {
+                mimeType: getMimeType(t.imageUrl),
+                data: stripBase64Header(t.imageUrl)
+              }
+            });
+            parts.push({
+              text: `🔒 STRICT_LIKENESS_TURNAROUND_${tIdx + 1} for "${char.name}" (${t.angle}) — additional facial-identity reference. Same NON-NEGOTIABLE rule applies.`
+            });
+          });
+        });
+      }
+
       // 0. COMPOSE MODE — Scene Reference + Character Reference
+
       // When both are present: explicit compositing instruction
       // When only one is present: use as highest-priority reference
       if (hasFullCompose) {
@@ -1321,6 +1390,10 @@ export const alterShotImage = async (
   const activeLocation = allLocations.find(l => l.id === shot.locationId);
   const referenceShot = shot.referenceShotId ? allShots.find(s => s.id === shot.referenceShotId) : null;
 
+  // 🔒 Strict Likeness Lock — see Shot.strictLikeness in types.ts.
+  const alterStrictLikeness = shot.strictLikeness !== false;
+  const alterHasActiveCharPortrait = activeCharacters.some(c => c.imageUrl);
+
   // Build Text Context - ONLY include characters and locations chosen for this shot
   let textContext = "";
 
@@ -1344,6 +1417,40 @@ export const alterShotImage = async (
 
   const parts: any[] = [];
 
+  // 0. 🔒 STRICT LIKENESS — when on, inject the chosen character portrait(s)
+  // BEFORE the start image so identity is anchored even if the start image
+  // already drifted from the character portrait. Re-injected later in step 3
+  // with the standard label so existing prompt logic is preserved.
+  if (alterStrictLikeness && alterHasActiveCharPortrait) {
+    activeCharacters.filter(c => c.imageUrl).slice(0, 5).forEach(char => {
+      parts.push({
+        inlineData: {
+          mimeType: getMimeType(char.imageUrl!),
+          data: stripBase64Header(char.imageUrl!)
+        }
+      });
+      parts.push({
+        text: `🔒 STRICT_LIKENESS_LOCK_${char.name}: This is "${char.name}". This portrait is the
+NON-NEGOTIABLE source of facial identity for this character — face, bone structure,
+eye color, hairline, skin tone. The REFERENCE_START_IMAGE below may have drifted —
+ANCHOR identity to THIS portrait, not the start image. Use the start image only for
+pose, framing context, lighting, and environment.`
+      });
+      const selectedTurnarounds = (char.turnaroundImages || []).filter(t => t.isSelected);
+      selectedTurnarounds.forEach((t, tIdx) => {
+        parts.push({
+          inlineData: {
+            mimeType: getMimeType(t.imageUrl),
+            data: stripBase64Header(t.imageUrl)
+          }
+        });
+        parts.push({
+          text: `🔒 STRICT_LIKENESS_TURNAROUND_${tIdx + 1} for "${char.name}" (${t.angle}) — additional facial-identity reference. Same NON-NEGOTIABLE rule.`
+        });
+      });
+    });
+  }
+
   // 1. INJECT CURRENT SHOT AS PRIMARY REFERENCE
   parts.push({
     inlineData: {
@@ -1352,6 +1459,7 @@ export const alterShotImage = async (
     }
   });
   parts.push({ text: "REFERENCE_START_IMAGE: This is the current shot. Use this as the visual base for CHARACTERS and LOCATION. However, you MUST re-frame the shot if the Shot Type or Angle has changed below." });
+
 
   // 1b. USER REFERENCE PHOTOS — highest priority after current shot
   const hasAlterUserRefPhotos = shot.referenceImages && shot.referenceImages.length > 0;

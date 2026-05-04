@@ -5,7 +5,58 @@ All notable changes to Slop Board Pro are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to semantic versioning where practical.
 
+## [1.4.19] — 2026-05-01
+
+### Added — **Strict Likeness Lock** toggle on every Shot Card
+
+The character-identity behaviour for shot generation is now an explicit,
+per-shot opt-in/out toggle instead of an invisible always-on prompt rule.
+This is the "strict guidance on character change" surface the user was
+looking for.
+
+- New field on `Shot`: `strictLikeness?: boolean` (`types.ts`).
+  - **Undefined is treated as `true`** so every existing shot in every
+    existing project is automatically opted into the stronger behaviour
+    on first re-generation — no migration needed.
+- New UI: amber 🔒 **"Strict Likeness"** pill on each ShotCard's
+  Character Selector row (shown only when at least one character is
+  toggled into the shot). Click to flip 🔒/🔓. Tooltip explains exactly
+  what the model will do in each state.
+- Prompt-side enforcement in `services/geminiService.ts`:
+  - `generateShotImage`:
+    1. When strict mode is on AND there's at least one selected
+       character with a portrait, the active character portraits
+       (and their selected turnarounds) are now **hoisted to the
+       front of the multimodal `parts` array** with explicit
+       `🔒 STRICT_LIKENESS_LOCK_<name>` labels. Gemini weights
+       earlier images more heavily, so identity wins ties against
+       any director Ref Photo or adjacent-shot reference.
+    2. A new `🔒 LIKENESS LOCK (STRICT)` clause is appended to the
+       main prompt declaring that face / bone structure / eye color
+       / hairline / skin tone are NON-NEGOTIABLE and that any
+       conflicting `DIRECTOR_REFERENCE_PHOTO` must yield to the
+       portrait on questions of identity (the director ref photo
+       still controls style, mood, color, composition, subject).
+  - `alterShotImage`: same treatment — the character portrait is
+    pushed in *before* the start image so identity is anchored to the
+    portrait, not to whatever drift the start image already had.
+- When `strictLikeness === false`: behaviour is unchanged from v1.4.18
+  (good for stylized / age-changed / non-human renders).
+- When the shot has no active character with a portrait, the
+  LIKENESS_LOCK clause is **omitted** instead of confusing the model
+  with a lock that has nothing to lock to.
+
+### Notes — what changed in the prompts vs. v1.4.18
+
+Existing prompt rules from `e80805b` ("strengthen reference prompts"),
+`85f1888` ("only inject chosen character/location references"), and
+`ceb94ce` ("prevent character contamination from adjacent shots — add
+character exclusion rule") are all still in place — Strict Likeness
+sits **on top** of them, it does not replace them. So previously
+stronger projects do not regress.
+
 ## [1.4.18] — 2026-04-28
+
 
 ### Fixed — Revert v1.4.17's universal `object-contain` change (broke layout in production)
 

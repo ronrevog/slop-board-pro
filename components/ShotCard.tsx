@@ -1,7 +1,8 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { Shot, Character, Location, ImageHistoryEntry, ChatMessage } from '../types';
-import { Camera, RefreshCw, SendHorizontal, MessageSquare, MapPin, Users, Edit3, Trash2, Upload, Download, Maximize2, Wand2, Plus, X, Link, Copy, Focus, History, RotateCcw, MonitorPlay, ArrowUpFromLine, MessageCircle, ImageIcon } from 'lucide-react';
+import { Camera, RefreshCw, SendHorizontal, MessageSquare, MapPin, Users, Edit3, Trash2, Upload, Download, Maximize2, Wand2, Plus, X, Link, Copy, Focus, History, RotateCcw, MonitorPlay, ArrowUpFromLine, MessageCircle, ImageIcon, Lock, Unlock } from 'lucide-react';
+
 import { Button } from './Button';
 import { ASPECT_RATIOS, COMPOSITION_TECHNIQUES } from '../constants';
 import { AspectRatio, CompositionTechnique } from '../types';
@@ -501,7 +502,7 @@ export const ShotCard: React.FC<ShotCardProps> = ({
           {/* Character Selector */}
           <div className="flex items-start gap-2">
             <Users className="w-3 h-3 text-neutral-500 mt-1.5" />
-            <div className="flex-1 flex flex-wrap gap-1">
+            <div className="flex-1 flex flex-wrap gap-1 items-center">
               {allCharacters.map(char => (
                 <button
                   key={char.id}
@@ -515,8 +516,28 @@ export const ShotCard: React.FC<ShotCardProps> = ({
                 </button>
               ))}
               {allCharacters.length === 0 && <span className="text-[10px] text-neutral-600 italic">No characters available</span>}
+
+              {/* Strict Likeness Lock toggle — only shown when at least one character is selected */}
+              {shot.characters.length > 0 && (
+                <button
+                  onClick={() => onUpdate(shot.id, { strictLikeness: shot.strictLikeness === false })}
+                  className={`ml-auto px-2 py-0.5 text-[10px] rounded border flex items-center gap-1 transition-colors ${shot.strictLikeness !== false
+                    ? 'bg-amber-900/40 border-amber-700/70 text-amber-300 hover:bg-amber-900/60'
+                    : 'bg-transparent border-neutral-800 text-neutral-500 hover:border-neutral-600 hover:text-neutral-300'
+                    }`}
+                  title={
+                    shot.strictLikeness !== false
+                      ? 'Strict Likeness ON — Gemini will treat the character portrait as non-negotiable (face / bone structure / eye color / hairline / skin tone). Director Ref Photos are demoted to style/mood only. Click to disable for stylized or age-changed renders.'
+                      : 'Strict Likeness OFF — Gemini may stylize or interpret the character. Click to re-enable face/identity lock.'
+                  }
+                >
+                  {shot.strictLikeness !== false ? <Lock className="w-2.5 h-2.5" /> : <Unlock className="w-2.5 h-2.5" />}
+                  Strict Likeness
+                </button>
+              )}
             </div>
           </div>
+
 
           {/* Reference Images */}
           <div className="flex items-start gap-2">
