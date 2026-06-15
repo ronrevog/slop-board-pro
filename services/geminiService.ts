@@ -1438,19 +1438,8 @@ Maintain visual continuity: same color grade, lighting, environment details, and
       // before the main prompt. Gemini weights the LAST image references most
       // heavily for identity, so we want the last face it sees to be the
       // locked portrait, not a location image or director ref photo.
-      if (strictLikeness && hasActiveCharPortrait) {
-        activeCharacters.filter(c => c.imageUrl).slice(0, 5).forEach(char => {
-          parts.push({
-            inlineData: {
-              mimeType: getMimeType(char.imageUrl!),
-              data: stripBase64Header(char.imageUrl!)
-            }
-          });
-          parts.push({
-            text: `🔒 FINAL_LIKENESS_REMINDER: This is "${char.name}". This is the LAST face reference you must consider — anchor the rendered character's identity to THIS portrait specifically. Ignore any face from other reference images.`
-          });
-        });
-      }
+      // references-only: single CHARACTER_REF injection above — no triple re-injection of the portrait.
+
 
 
       // Add main prompt for normal generation
@@ -1720,19 +1709,8 @@ You MUST closely reproduce the visual qualities, composition, subject matter, st
 
   // 🔒 STRICT LIKENESS: re-inject the character portrait ONE MORE TIME just
   // before the main prompt so the LAST face Gemini sees is the locked portrait.
-  if (alterStrictLikeness && alterHasActiveCharPortrait) {
-    activeCharacters.filter(c => c.imageUrl).slice(0, 5).forEach(char => {
-      parts.push({
-        inlineData: {
-          mimeType: getMimeType(char.imageUrl!),
-          data: stripBase64Header(char.imageUrl!)
-        }
-      });
-      parts.push({
-        text: `🔒 FINAL_LIKENESS_REMINDER: This is "${char.name}". This is the LAST face reference you must consider — anchor the rendered character's identity to THIS portrait. Ignore any face from the start image or other references.`
-      });
-    });
-  }
+  // references-only: single CHARACTER_REF injection above — no triple re-injection.
+
 
 
   // Check if using Panavision C-Series Anamorphic lens
