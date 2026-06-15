@@ -886,10 +886,11 @@ export const generateShotImage = async (
   if (activeCharacters.length > 0) {
     textContext += "CHARACTERS IN THIS SHOT:\n";
     activeCharacters.forEach(c => {
-      const lockThisChar = strictLikeness && !!c.imageUrl;
+      const lockThisChar = !!c.imageUrl;
       if (lockThisChar) {
-        textContext += `- "${c.name}": appearance is defined ENTIRELY by the locked portrait images (🔒 STRICT_LIKENESS_LOCK_${c.name} below). IGNORE any prior assumption about this character's age, build, beard, hair color, or facial features. The portrait IS the source of truth.\n`;
+        textContext += `- "${c.name}": appearance is defined ENTIRELY by this character's CHARACTER_REF image. IGNORE any prior assumption about this character's age, build, beard, hair color, or facial features. The reference image IS the source of truth.\n`;
       } else {
+
         textContext += `- ${c.name}: ${c.description || 'No description'}`;
         if ((c as any).wardrobe) textContext += ` | Wardrobe: ${(c as any).wardrobe}`;
         if ((c as any).physicalFeatures) textContext += ` | Physical: ${(c as any).physicalFeatures}`;
@@ -913,20 +914,25 @@ export const generateShotImage = async (
   //  (2) there is at least one active character with a portrait image to lock to.
   // We do NOT add the clause when there's no portrait, because Gemini would have
   // nothing to "lock" against and the wording would just confuse it.
-  const likenessLockClause = (strictLikeness && hasActiveCharPortrait)
+  const likenessLockClause = (hasActiveCharPortrait || (activeLocation && activeLocation.imageUrl))
     ? `
     =============================================
-    🔒 LIKENESS LOCK (STRICT)
+    🔒 REFERENCE LOCK — THE SELECTED REFERENCES ARE THE ONLY AUTHORITY
     =============================================
-    The character's face, bone structure, eye color, hairline, and skin tone in
-    REFERENCE_CHARACTER_IN_SHOT are NON-NEGOTIABLE. You may change pose,
-    expression, lighting, wardrobe context, and framing only. Do NOT interpolate,
-    age, stylize, or "improve" the face. If a director-supplied DIRECTOR_REFERENCE_PHOTO
-    contradicts the character portrait on facial identity, the character portrait
-    WINS — use the director photo only for style, mood, color, composition, and
-    subject matter, never for the character's face/identity.
+    - The PEOPLE in this image are defined ONLY by the CHARACTER_REF image(s).
+      Reproduce each character's exact face, bone structure, eye color, hairline,
+      skin tone, age, and build. Do NOT age, stylize, beautify, or reinterpret them,
+      and do NOT swap in any other face.
+    - The ENVIRONMENT is defined ONLY by the LOCATION_REF image. Reproduce that
+      exact place. Do NOT invent a different room or landscape.
+    - Do NOT add, invent, or borrow ANY other person, face, or figure from anywhere
+      (including faces that appear inside the LOCATION_REF image).
+    - Use the written description ONLY for pose, action, camera framing, expression,
+      wardrobe context, and lighting mood — NEVER to override the reference images
+      on identity or environment.
     `
     : "";
+
 
   // Build Dialogue Context for facial expressions/mouth shape
 
@@ -1017,7 +1023,8 @@ export const generateShotImage = async (
        - Atmosphere and mood
        - Props and environmental elements
     
-    3. If reference images are provided, use them for visual consistency but OVERRIDE with the text descriptions where they conflict.
+    3. Reference images are the SOURCE OF TRUTH. The CHARACTER_REF image(s) define the people and the LOCATION_REF image defines the environment. Use the text ONLY for pose, action, framing, expression, and lighting — NEVER to override the reference images on identity or environment.
+
     
     4. Render with "Masterpiece" quality: 8k resolution, professional color grading, realistic textures, volumetric lighting.
     
@@ -1792,9 +1799,14 @@ You MUST closely reproduce the visual qualities, composition, subject matter, st
 
   parts.push({ text: mainPrompt });
 
+  // Debug manifest — ordered reference labels actually sent to the model.
+  console.log('[alterShotImage] references-only →',
+    parts.filter(p => p.text).map(p => (p.text.split('\n')[0] || '').trim().slice(0, 48)).join('  |  '));
+
   const targetRatio = mapAspectRatio(settings.aspectRatio);
 
   try {
+
     const response = await ai.models.generateContent({
       model: 'gemini-3.1-flash-image-preview',
       contents: { parts: parts },
