@@ -1136,7 +1136,8 @@ CRITICAL: This must look like a DIFFERENT CAMERA ANGLE of the SAME SCENE - not a
       // instruction. Other character portraits (for multi-character shots),
       // turnarounds, location image, and director ref photos still come
       // after as supporting references.
-      const strictHardLock = strictLikeness && hasActiveCharPortrait && !hasComposeRefs;
+      const strictHardLock = false; // references-only: portrait is a REFERENCE, not the edit-base — the old "EDIT THIS PORTRAIT" path forced the portrait's studio background and out-voted the selected LOCATION image, causing environment inconsistency
+
       const lockPrimaryChar = strictHardLock
         ? activeCharacters.find(c => !!c.imageUrl)
         : null;
