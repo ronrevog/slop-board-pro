@@ -26,7 +26,6 @@ export interface WanGenerationSettings {
   resolution: '720p' | '1080p';
   duration: '5' | '10' | '15';
   enablePromptExpansion: boolean;
-  multiShots: boolean;
   enableSafetyChecker: boolean;
   negativePrompt: string;
   seed?: number;
@@ -326,7 +325,6 @@ export const VideoShotCard: React.FC<VideoShotCardProps> = ({
     resolution: projectVideoSettings?.wanResolution || '1080p',
     duration: projectVideoSettings?.wanDuration || '5',
     enablePromptExpansion: projectVideoSettings?.wanEnablePromptExpansion ?? true,
-    multiShots: projectVideoSettings?.wanMultiShots ?? false,
     enableSafetyChecker: projectVideoSettings?.wanEnableSafetyChecker ?? true,
     negativePrompt: projectVideoSettings?.wanNegativePrompt || '',
     seed: projectVideoSettings?.wanSeed,
@@ -506,7 +504,7 @@ export const VideoShotCard: React.FC<VideoShotCardProps> = ({
                 </div>
                 <div className={`text-xs mt-2 uppercase tracking-widest ${selectedProvider === 'wan' ? 'text-orange-400' : selectedProvider === 'aurora' ? 'text-purple-400' : selectedProvider === 'seedance' ? 'text-emerald-400' : 'text-neutral-400'
                   }`}>
-                  {selectedProvider === 'wan' ? 'Wan v2.6 (fal.ai)'
+                  {selectedProvider === 'wan' ? 'Wan v2.7 (fal.ai)'
                     : selectedProvider === 'aurora' ? 'Lip Sync — Aurora (fal.ai)'
                       : selectedProvider === 'seedance' ? 'Seedance 2.0 (PiAPI)'
                         : videoModelLabel}
@@ -756,7 +754,7 @@ export const VideoShotCard: React.FC<VideoShotCardProps> = ({
                     : 'border-neutral-700 bg-neutral-800/50 text-neutral-400 hover:border-neutral-500'
                     }`}
                 >
-                  Wan v2.6
+                  Wan v2.7
                 </button>
                 <button
                   onClick={() => setSelectedProvider('seedance')}
@@ -803,7 +801,7 @@ export const VideoShotCard: React.FC<VideoShotCardProps> = ({
               </div>
             )}
 
-            {/* Wan v2.6 Settings & Generate */}
+            {/* Wan v2.7 Settings & Generate */}
             {selectedProvider === 'wan' && (
               <div className="space-y-3 animate-fade-in">
                 {/* Wan Settings Toggle */}
@@ -812,7 +810,7 @@ export const VideoShotCard: React.FC<VideoShotCardProps> = ({
                   className="w-full flex items-center justify-between px-3 py-2 bg-neutral-800/50 border border-neutral-700 rounded-lg text-sm text-neutral-300 hover:bg-neutral-800 transition-colors"
                 >
                   <span className="flex items-center gap-2">
-                    <Settings className="w-3 h-3" /> Wan v2.6 Settings
+                    <Settings className="w-3 h-3" /> Wan v2.7 Settings
                   </span>
                   {showWanSettings ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
                 </button>
@@ -859,17 +857,6 @@ export const VideoShotCard: React.FC<VideoShotCardProps> = ({
                           <Square className="w-4 h-4 text-neutral-500" />
                         )}
                         Prompt Expansion
-                      </button>
-                      <button
-                        onClick={() => setWanSettings(s => ({ ...s, multiShots: !s.multiShots }))}
-                        className="flex items-center gap-2 text-xs text-neutral-300 hover:text-white transition-colors w-full"
-                      >
-                        {wanSettings.multiShots ? (
-                          <CheckSquare className="w-4 h-4 text-orange-500" />
-                        ) : (
-                          <Square className="w-4 h-4 text-neutral-500" />
-                        )}
-                        Multi-Shots
                       </button>
                       <button
                         onClick={() => setWanSettings(s => ({ ...s, enableSafetyChecker: !s.enableSafetyChecker }))}

@@ -61,12 +61,11 @@ export interface VideoProviderSettings {
    * can be used independently.
    */
   piapiApiKey?: string;
-  // Wan v2.6 specific settings
+  // Wan v2.7 specific settings
   wanResolution: '720p' | '1080p';
   wanDuration: '5' | '10' | '15';
   wanEnableSafetyChecker: boolean;
   wanEnablePromptExpansion: boolean;
-  wanMultiShots: boolean;
   wanNegativePrompt: string;
   wanSeed?: number;
   wanAudioUrl?: string;
@@ -236,7 +235,6 @@ export const DEFAULT_VIDEO_SETTINGS: VideoProviderSettings = {
   wanDuration: '5',
   wanEnableSafetyChecker: true,
   wanEnablePromptExpansion: true,
-  wanMultiShots: false,
   wanNegativePrompt: '',
   auroraResolution: '720p',
   auroraGuidanceScale: 1,

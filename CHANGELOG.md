@@ -5,6 +5,24 @@ All notable changes to Slop Board Pro are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to semantic versioning where practical.
 
+## [1.4.21] — 2026-06-15
+
+### Changed — Upgraded fal.ai Wan video from v2.6 → v2.7
+
+The fal.ai image-to-video provider now targets the `fal-ai/wan/v2.7/image-to-video`
+endpoint (previously `v2.6`). Wan v2.7 brings improved motion coherence and prompt
+adherence while keeping the same request/response contract.
+
+- `services/falService.ts`: endpoint bumped to `fal-ai/wan/v2.7/image-to-video`.
+- `types.ts`: removed the now-unsupported `wanMultiShots` field from
+  `VideoProviderSettings`.
+- `components/VideoShotCard.tsx`: removed the per-shot **Multi-Shots** toggle
+  and the `multiShots` field from `WanGenerationSettings`; all "Wan v2.6"
+  labels updated to **Wan v2.7**.
+- `components/ProjectEditor.tsx`: removed the project-level **Multi-Shots Mode**
+  default toggle and its mapping; all "Wan v2.6" labels (provider card, fal.ai
+  key hint, settings header) updated to **Wan v2.7**.
+
 ## [1.4.20] — 2026-05-04
 
 ### Fixed — Strict Likeness Lock was being out-voted by trailing references

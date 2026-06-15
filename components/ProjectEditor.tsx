@@ -1423,7 +1423,7 @@ Style: ${project.settings.cinematographer}, shot on ${project.settings.filmStock
     );
   };
 
-  // --- Wan v2.6 Video Generation ---
+  // --- Wan v2.7 Video Generation ---
   const handleGenerateWanVideo = async (shotId: string, wanSettings: WanGenerationSettings, sourceVideoUrl?: string) => {
     if (!activeSceneId) return;
     const shot = currentShots.find(s => s.id === shotId);
@@ -1451,7 +1451,6 @@ Style: ${project.settings.cinematographer}, shot on ${project.settings.filmStock
         wanResolution: wanSettings.resolution,
         wanDuration: wanSettings.duration,
         wanEnablePromptExpansion: wanSettings.enablePromptExpansion,
-        wanMultiShots: wanSettings.multiShots,
         wanEnableSafetyChecker: wanSettings.enableSafetyChecker,
         wanNegativePrompt: wanSettings.negativePrompt,
         wanSeed: wanSettings.seed,
@@ -2639,7 +2638,7 @@ TIP: Select (highlight) a portion of text and click 'Analyze Scene' to analyze o
                 {/* fal.ai API Key */}
                 <div className="space-y-2">
                   <label className="text-xs font-bold text-neutral-500 uppercase tracking-widest">
-                    fal.ai API Key <span className="text-neutral-600">(Wan v2.6 + Lip Sync)</span>
+                    fal.ai API Key <span className="text-neutral-600">(Wan v2.7 + Lip Sync)</span>
                   </label>
                   <div className="flex gap-2">
                     <input
@@ -2828,7 +2827,7 @@ TIP: Select (highlight) a portion of text and click 'Analyze Scene' to analyze o
                       : 'border-neutral-700 bg-neutral-800/50 text-neutral-400 hover:border-neutral-500'
                       }`}
                   >
-                    <div className="font-bold text-sm mb-1">Wan v2.6 (fal.ai)</div>
+                    <div className="font-bold text-sm mb-1">Wan v2.7 (fal.ai)</div>
                     <div className="text-xs text-neutral-500">Image-to-Video, 5-15s</div>
                   </button>
                   <button
@@ -2854,12 +2853,12 @@ TIP: Select (highlight) a portion of text and click 'Analyze Scene' to analyze o
                 </div>
               </div>
 
-              {/* fal.ai Wan v2.6 Settings */}
+              {/* fal.ai Wan v2.7 Settings */}
               {project.videoSettings?.provider === 'fal-wan' && (
                 <div className="bg-neutral-900 p-6 rounded-lg border border-neutral-800 shadow-xl space-y-6">
                   <h3 className="text-lg font-serif text-white flex items-center gap-2">
                     <Settings className="w-5 h-5 text-orange-500" />
-                    Wan v2.6 Default Settings
+                    Wan v2.7 Default Settings
                   </h3>
 
                   <div className="grid grid-cols-2 gap-4">
@@ -2913,22 +2912,6 @@ TIP: Select (highlight) a portion of text and click 'Analyze Scene' to analyze o
                       )}
                       Enable Prompt Expansion
                       <span className="text-xs text-neutral-600">(LLM rewrites prompt for better results)</span>
-                    </button>
-
-                    <button
-                      onClick={() => setProject(p => ({
-                        ...p,
-                        videoSettings: { ...(p.videoSettings || DEFAULT_VIDEO_SETTINGS), wanMultiShots: !(p.videoSettings?.wanMultiShots ?? false) }
-                      }))}
-                      className="flex items-center gap-2 text-sm text-neutral-300 hover:text-white transition-colors"
-                    >
-                      {project.videoSettings?.wanMultiShots ? (
-                        <CheckSquare className="w-5 h-5 text-red-500" />
-                      ) : (
-                        <Square className="w-5 h-5 text-neutral-500" />
-                      )}
-                      Multi-Shots Mode
-                      <span className="text-xs text-neutral-600">(Intelligent scene segmentation)</span>
                     </button>
 
                     <button

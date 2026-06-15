@@ -1,5 +1,5 @@
 /**
- * fal.ai Service - Wan v2.6 Image-to-Video
+ * fal.ai Service - Wan v2.7 Image-to-Video
  * Uses official @fal-ai/client SDK to avoid CORS issues
  */
 
@@ -52,11 +52,15 @@ const prepareImageUrl = async (imageUrl: string): Promise<string> => {
 export interface WanVideoInput {
     prompt: string;
     image_url: string;
+    /** Optional last-frame image for first-and-last-frame-to-video (v2.7) */
+    end_image_url?: string;
+    /** Optional source clip for video continuation — cannot be combined with image_url (v2.7) */
+    video_url?: string;
     resolution?: '720p' | '1080p';
-    duration?: '5' | '10' | '15';
+    /** v2.7 expects an integer duration in seconds (2-15) */
+    duration?: number;
     enable_safety_checker?: boolean;
     enable_prompt_expansion?: boolean;
-    multi_shots?: boolean;
     negative_prompt?: string;
     seed?: number;
     audio_url?: string;
@@ -77,7 +81,7 @@ export interface WanVideoOutput {
 }
 
 /**
- * Generate a video using Wan v2.6 image-to-video via fal.ai SDK
+ * Generate a video using Wan v2.7 image-to-video via fal.ai SDK
  * @param imageUrl - Base64 or URL of the source image
  * @param prompt - Motion/action prompt for the video
  * @param settings - Video provider settings
@@ -109,21 +113,21 @@ export const generateWanVideo = async (
         prompt,
         image_url: preparedImageUrl,
         resolution: settings.wanResolution,
-        duration: settings.wanDuration,
+        // v2.7 requires an integer duration (2-15s); settings store it as a string.
+        duration: Number(settings.wanDuration),
         enable_safety_checker: settings.wanEnableSafetyChecker,
         enable_prompt_expansion: settings.wanEnablePromptExpansion,
-        multi_shots: settings.wanMultiShots,
         negative_prompt: settings.wanNegativePrompt || undefined,
         seed: settings.wanSeed,
         audio_url: settings.wanAudioUrl || undefined,
     };
 
-    console.log('Submitting to fal.ai Wan v2.6 via SDK:', { ...input, image_url: input.image_url.substring(0, 50) + '...' });
+    console.log('Submitting to fal.ai Wan v2.7 via SDK:', { ...input, image_url: input.image_url.substring(0, 50) + '...' });
     onProgress?.('Submitting to fal.ai...');
 
     try {
         // Use fal.subscribe for queue-based generation with progress updates
-        const result = await fal.subscribe('wan/v2.6/image-to-video', {
+        const result = await fal.subscribe('fal-ai/wan/v2.7/image-to-video', {
             input,
             logs: true,
             onQueueUpdate: (update) => {

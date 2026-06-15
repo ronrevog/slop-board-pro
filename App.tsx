@@ -35,48 +35,53 @@ const RecoveryModal: React.FC<{
   const savedAt = meta?.savedAt ? new Date(meta.savedAt).toLocaleString() : 'Unknown';
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm">
-      <div className="bg-neutral-900 border border-yellow-600/50 rounded-xl p-8 max-w-lg w-full mx-4 shadow-2xl">
-        <div className="flex items-center gap-3 mb-4">
-          <div className="w-12 h-12 bg-yellow-900/30 rounded-full flex items-center justify-center">
-            <span className="text-2xl">⚠️</span>
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/85 backdrop-blur-md animate-fade-in">
+      <div className="glass-panel-heavy border-yellow-600/35 rounded-2xl p-8 max-w-lg w-full mx-4 shadow-2xl animate-fade-in-up relative overflow-hidden">
+        {/* Subtle ambient amber pulse behind the icon */}
+        <div className="absolute -top-16 -left-16 w-36 h-36 bg-yellow-500/10 rounded-full blur-3xl pointer-events-none" />
+        
+        <div className="flex items-center gap-3 mb-6 relative z-10">
+          <div className="w-12 h-12 bg-yellow-950/30 rounded-full flex items-center justify-center ring-1 ring-yellow-500/20">
+            <span className="text-xl">⚠️</span>
           </div>
           <div>
-            <h2 className="text-xl font-serif font-bold text-white">Data Recovery Available</h2>
-            <p className="text-sm text-yellow-500">Your browser data may have been lost</p>
+            <h2 className="text-xl font-serif font-bold text-white tracking-wide">Data Recovery Available</h2>
+            <p className="text-xs text-yellow-400 font-medium uppercase tracking-wider mt-0.5">System Restore Protocol</p>
           </div>
         </div>
 
-        <div className="bg-neutral-800 rounded-lg p-4 mb-6 space-y-2">
+        <div className="bg-neutral-950/40 border border-neutral-900 rounded-xl p-5 mb-6 space-y-3 relative z-10">
           <p className="text-sm text-neutral-300">
-            We found a backup snapshot with <span className="text-white font-bold">{projectCount} project{projectCount !== 1 ? 's' : ''}</span>:
+            We discovered a browser backup snapshot containing <span className="text-yellow-400 font-bold">{projectCount} project{projectCount !== 1 ? 's' : ''}</span>:
           </p>
-          <ul className="text-sm text-neutral-400 space-y-1 ml-4">
+          <ul className="text-xs text-neutral-400 space-y-2 pl-2">
             {titles.slice(0, 5).map((title: string, i: number) => (
               <li key={i} className="flex items-center gap-2">
-                <span className="text-yellow-500">•</span> {title}
+                <span className="text-yellow-500/60">•</span> <span className="text-neutral-200 font-medium">{title}</span>
               </li>
             ))}
             {titles.length > 5 && (
-              <li className="text-neutral-500">...and {titles.length - 5} more</li>
+              <li className="text-neutral-500 pl-4 font-semibold">...and {titles.length - 5} more</li>
             )}
           </ul>
-          <p className="text-xs text-neutral-500 mt-2">Snapshot from: {savedAt}</p>
-          <p className="text-xs text-yellow-600 mt-1">
-            ⚠️ Images will need to be re-generated (only text data is preserved in emergency snapshots)
-          </p>
+          <div className="border-t border-neutral-800/40 pt-3 mt-2 flex flex-col gap-1 text-[11px] text-neutral-500">
+            <span>Snapshot timestamp: {savedAt}</span>
+            <span className="text-yellow-600/90 font-medium">
+              ⚠️ Note: Only text assets are recoverable. Generated images will require regeneration.
+            </span>
+          </div>
         </div>
 
-        <div className="flex gap-3">
+        <div className="flex gap-3 relative z-10">
           <button
             onClick={onRecover}
-            className="flex-1 bg-yellow-600 hover:bg-yellow-500 text-black font-bold py-3 px-4 rounded-lg transition-colors"
+            className="flex-1 bg-yellow-600 hover:bg-yellow-500 text-black font-semibold py-2.5 px-4 rounded-lg shadow-lg shadow-yellow-950/40 hover:shadow-yellow-600/10 hover:scale-[1.02] active:scale-[0.98] transition-all duration-300"
           >
             Restore Projects
           </button>
           <button
             onClick={onDismiss}
-            className="px-6 py-3 text-neutral-400 hover:text-white bg-neutral-800 hover:bg-neutral-700 rounded-lg transition-colors"
+            className="px-6 py-2.5 text-neutral-400 hover:text-white glass-panel hover:bg-neutral-800/30 rounded-lg hover:scale-[1.02] active:scale-[0.98] transition-all duration-300"
           >
             Dismiss
           </button>
@@ -94,47 +99,50 @@ const MigrationModal: React.FC<{
   onSkip: () => void;
   isMigrating: boolean;
 }> = ({ localCount, cloudCount, onMigrate, onSkip, isMigrating }) => (
-  <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm">
-    <div className="bg-neutral-900 border border-blue-600/50 rounded-xl p-8 max-w-lg w-full mx-4 shadow-2xl">
-      <div className="flex items-center gap-3 mb-4">
-        <div className="w-12 h-12 bg-blue-900/30 rounded-full flex items-center justify-center">
-          <span className="text-2xl">☁️</span>
+  <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/85 backdrop-blur-md animate-fade-in">
+    <div className="glass-panel-heavy border-blue-600/35 rounded-2xl p-8 max-w-lg w-full mx-4 shadow-2xl animate-fade-in-up relative overflow-hidden">
+      {/* Ambient blue pulse glow */}
+      <div className="absolute -top-16 -left-16 w-36 h-36 bg-blue-500/10 rounded-full blur-3xl pointer-events-none" />
+
+      <div className="flex items-center gap-3 mb-6 relative z-10">
+        <div className="w-12 h-12 bg-blue-950/30 rounded-full flex items-center justify-center ring-1 ring-blue-500/20">
+          <span className="text-xl">☁️</span>
         </div>
         <div>
-          <h2 className="text-xl font-serif font-bold text-white">Upload to Cloud?</h2>
-          <p className="text-sm text-blue-400">Sync your local projects to your account</p>
+          <h2 className="text-xl font-serif font-bold text-white tracking-wide">Upload to Cloud?</h2>
+          <p className="text-xs text-blue-400 font-medium uppercase tracking-wider mt-0.5">Cloud Integration protocol</p>
         </div>
       </div>
 
-      <div className="bg-neutral-800 rounded-lg p-4 mb-6 space-y-2">
+      <div className="bg-neutral-950/40 border border-neutral-900 rounded-xl p-5 mb-6 space-y-3 relative z-10">
         <p className="text-sm text-neutral-300">
-          You have <span className="text-white font-bold">{localCount} local project{localCount !== 1 ? 's' : ''}</span> in this browser
+          You have <span className="text-blue-400 font-bold">{localCount} local project{localCount !== 1 ? 's' : ''}</span> in this browser
           {cloudCount > 0 && <> and <span className="text-white font-bold">{cloudCount}</span> already in the cloud</>}.
         </p>
-        <p className="text-sm text-neutral-400">
-          Upload your local projects so you can access them from any device?
+        <p className="text-sm text-neutral-400 leading-relaxed">
+          Would you like to sync and securely back up these local projects to your cloud account? This ensures you can access them from any editing bay.
         </p>
       </div>
 
-      <div className="flex gap-3">
+      <div className="flex gap-3 relative z-10">
         <button
           onClick={onMigrate}
           disabled={isMigrating}
-          className="flex-1 bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 px-4 rounded-lg transition-colors disabled:opacity-50"
+          className="flex-1 bg-blue-600 hover:bg-blue-500 text-white font-semibold py-2.5 px-4 rounded-lg shadow-lg shadow-blue-950/40 hover:shadow-blue-600/10 hover:scale-[1.02] active:scale-[0.98] transition-all duration-300 disabled:opacity-50"
         >
           {isMigrating ? (
             <span className="flex items-center justify-center gap-2">
               <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-              Uploading...
+              Syncing Projects...
             </span>
           ) : (
-            'Upload to Cloud'
+            'Sync to Cloud'
           )}
         </button>
         <button
           onClick={onSkip}
           disabled={isMigrating}
-          className="px-6 py-3 text-neutral-400 hover:text-white bg-neutral-800 hover:bg-neutral-700 rounded-lg transition-colors"
+          className="px-6 py-2.5 text-neutral-400 hover:text-white glass-panel hover:bg-neutral-800/30 rounded-lg hover:scale-[1.02] active:scale-[0.98] transition-all duration-300"
         >
           Skip
         </button>
@@ -407,37 +415,63 @@ export default function App() {
   // Signed in but no API key → prompt for Gemini key
   if (!apiKey) {
     return (
-      <div className="h-screen flex items-center justify-center bg-black text-white p-8 text-center">
-        <div className="w-full max-w-md">
+      <div className="h-screen flex items-center justify-center bg-radial-cinematic text-white p-8 text-center animate-fade-in">
+        <div className="w-full max-w-md glass-panel-heavy p-8 md:p-10 rounded-2xl shadow-2xl relative overflow-hidden animate-fade-in-up">
+          {/* Crimson ambient glow behind logo */}
+          <div className="absolute -top-24 left-1/2 -translate-x-1/2 w-48 h-48 bg-red-600/10 rounded-full blur-3xl pointer-events-none" />
+
           {/* User info bar */}
-          <div className="flex items-center justify-center gap-3 mb-8">
+          <div className="flex items-center justify-center gap-3 mb-8 bg-neutral-950/40 py-2 px-4 rounded-full border border-neutral-900/60 max-w-xs mx-auto z-10 relative">
             {authUser.photoURL && (
-              <img src={authUser.photoURL} alt="" className="w-8 h-8 rounded-full" />
+              <img src={authUser.photoURL} alt="" className="w-6 h-6 rounded-full ring-1 ring-neutral-800" referrerPolicy="no-referrer" />
             )}
-            <span className="text-sm text-neutral-400">{authUser.displayName || authUser.email}</span>
-            <button onClick={handleSignOut} className="text-xs text-neutral-600 hover:text-red-500 ml-2">
+            <span className="text-xs text-neutral-400 truncate max-w-[140px]">{authUser.displayName || authUser.email}</span>
+            <button 
+              onClick={handleSignOut} 
+              className="text-xs text-neutral-500 hover:text-red-500 transition-colors ml-2 pl-2 border-l border-neutral-800/80 font-medium"
+            >
               Sign out
             </button>
           </div>
 
-          <img src="/img/slopboard_logo_text.png" alt="Slop Board" className="h-10 w-auto mb-4 mx-auto" />
-          <p className="text-neutral-400 mb-6">Enter your Google Gemini API Key to continue</p>
-          <form onSubmit={handleSaveApiKey}>
-            <input
-              type="password"
-              name="apiKey"
-              className="w-full bg-neutral-900 border border-neutral-800 rounded px-4 py-2 text-white mb-4 focus:outline-none focus:border-red-600"
-              placeholder="AIzaSy..."
-              autoFocus
-            />
-            <button
-              type="submit"
-              className="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded transition-colors"
-            >
-              Start Creative Studio
-            </button>
-          </form>
-          <p className="text-xs text-neutral-600 mt-4">Key is saved locally in your browser. Get a key from Google AI Studio.</p>
+          <div className="relative z-10 space-y-6">
+            <div className="space-y-2">
+              <img 
+                src="/img/slopboard_logo_text.png" 
+                alt="Slop Board" 
+                className="h-10 w-auto mx-auto filter drop-shadow-[0_0_12px_rgba(239,68,68,0.25)] animate-glow-pulse" 
+              />
+              <p className="text-neutral-500 uppercase tracking-widest text-[10px] font-semibold">Cinematic Script & Storyboard Engine</p>
+            </div>
+            
+            <p className="text-sm text-neutral-400 leading-relaxed px-2">
+              Enter your <span className="text-neutral-200 font-semibold">Google Gemini API Key</span> to power the real-time AI storyboard generation.
+            </p>
+
+            <form onSubmit={handleSaveApiKey} className="space-y-4 pt-2">
+              <input
+                type="password"
+                name="apiKey"
+                className="w-full glass-input px-4 py-3 rounded-lg text-white mb-2 text-center tracking-widest placeholder:tracking-normal placeholder:text-neutral-600 focus:outline-none text-sm"
+                placeholder="AIzaSy..."
+                autoFocus
+              />
+              <button
+                type="submit"
+                className="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-3 px-4 rounded-lg shadow-lg shadow-red-950/50 hover:shadow-red-700/30 hover:scale-[1.02] active:scale-[0.98] transition-all duration-300"
+              >
+                Start Creative Studio
+              </button>
+            </form>
+            
+            <div className="pt-2 border-t border-neutral-900/80">
+              <p className="text-[11px] text-neutral-500 leading-relaxed">
+                Your API key is stored safely and locally inside your browser's private storage. 
+                <br />
+                Get a free key from the <a href="https://aistudio.google.com/" target="_blank" rel="noopener noreferrer" className="text-red-500/80 hover:text-red-400 underline transition-colors">Google AI Studio</a>.
+              </p>
+            </div>
+          </div>
         </div>
       </div>
     );
