@@ -72,17 +72,47 @@ const mapResolutionToQuality = (resolution?: string): string => {
 
 // ---- base64 / blob helpers --------------------------------------------
 
-/** Convert a base64 data URL (or raw base64) into a Blob for FormData uploads. */
-const dataUrlToBlob = (dataUrl: string): Blob => {
-  const hasHeader = dataUrl.includes(",");
-  const header = hasHeader ? dataUrl.split(",")[0] : "";
-  const b64 = hasHeader ? dataUrl.split(",")[1] : dataUrl;
-  const mimeMatch = header.match(/data:([^;]+)/);
-  const mime = mimeMatch ? mimeMatch[1] : "image/png";
+/** Decode raw base64 into a Blob. */
+const base64ToBlob = (b64: string, mime: string): Blob => {
   const binary = atob(b64);
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
   return new Blob([bytes], { type: mime });
+};
+
+/**
+ * Convert ANY image input into a Blob for FormData uploads.
+ * Handles three shapes the app produces:
+ *  - `https://` / `blob:` URLs (e.g. Firebase Storage cloud URLs that replace
+ *    base64 after a cloud save) -> fetched over the network.
+ *  - `data:` URLs -> base64 decoded locally.
+ *  - raw base64 (no header) -> base64 decoded locally as PNG.
+ * Previously this assumed every input was base64 and called atob() directly,
+ * which threw "InvalidCharacterError: Failed to execute 'atob'" the moment a
+ * synced project handed it an https cloud URL.
+ */
+const imageInputToBlob = async (input: string): Promise<Blob> => {
+  if (input.startsWith("http://") || input.startsWith("https://") || input.startsWith("blob:")) {
+    const res = await fetch(input);
+    if (!res.ok) throw new Error(`Failed to fetch reference image (HTTP ${res.status}).`);
+    return await res.blob();
+  }
+  if (input.startsWith("data:")) {
+    const commaIdx = input.indexOf(",");
+    const header = input.slice(0, commaIdx);
+    const b64 = input.slice(commaIdx + 1);
+    const mimeMatch = header.match(/data:([^;]+)/);
+    return base64ToBlob(b64, mimeMatch ? mimeMatch[1] : "image/png");
+  }
+  // Raw base64 with no data-URL header.
+  return base64ToBlob(input, "image/png");
+};
+
+/** Pick a sensible file extension from a blob mime type for the OpenAI upload. */
+const extForBlob = (blob: Blob): string => {
+  if (blob.type.includes("jpeg") || blob.type.includes("jpg")) return "jpg";
+  if (blob.type.includes("webp")) return "webp";
+  return "png";
 };
 
 // ---- error handling ----------------------------------------------------
@@ -277,8 +307,9 @@ const requestEdit = async (
   form.append("size", size);
   form.append("quality", quality);
   form.append("n", "1");
-  images.forEach((img, i) => {
-    form.append("image[]", dataUrlToBlob(img.dataUrl), `ref_${i}.png`);
+  const blobs = await Promise.all(images.map((img) => imageInputToBlob(img.dataUrl)));
+  blobs.forEach((blob, i) => {
+    form.append("image[]", blob, `ref_${i}.${extForBlob(blob)}`);
   });
 
   const response = await fetch(OPENAI_IMAGE_EDITS_URL, {

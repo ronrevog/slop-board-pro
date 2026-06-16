@@ -5,6 +5,29 @@ All notable changes to Slop Board Pro are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to semantic versioning where practical.
 
+## [1.5.2] — 2026-06-16
+
+### Fixed — GPT Image 2 crashed (`atob` InvalidCharacterError) on cloud-synced projects
+
+Generating with the OpenAI / GPT Image 2 engine threw
+`InvalidCharacterError: Failed to execute 'atob' on 'Window'` whenever the shot's
+character/location references had already been pushed to the cloud. After a cloud
+save, the app swaps the in-memory base64 `imageUrl`s for Firebase Storage `https://`
+download URLs — but `openaiImageService`'s `dataUrlToBlob()` assumed every reference
+was base64 and called `atob()` on the raw `https://…` string, which is not valid
+base64, so the whole generation aborted before the OpenAI request was even built.
+
+- `services/openaiImageService.ts`: replaced `dataUrlToBlob()` with an async
+  `imageInputToBlob()` that detects the input shape — `http(s)://` / `blob:` URLs are
+  fetched over the network, `data:` URLs and raw base64 are decoded locally — and
+  rewrote `requestEdit()` to await blob conversion for all reference images (with a
+  correct file extension per blob mime type).
+
+> Unrelated note: a `net::ERR_BLOCKED_BY_CLIENT` line in the same console trace is a
+> browser ad/privacy extension (e.g. uBlock, Brave Shields) blocking requests to
+> `api.openai.com`. If OpenAI generation still fails after this fix, allowlist the
+> site or disable the blocker for it — that block happens in the browser, not in app code.
+
 ## [1.5.1] — 2026-06-16
 
 ### Fixed — Opaque fal.ai 422 "ValidationError" now shows the real reason
