@@ -43,7 +43,7 @@ all projects.
 - `services/imageService.ts` (new): a thin router that dispatches
   `generateShotImage`, `alterShotImage`, and `generateAssetImage` to either the
   Gemini or OpenAI backend based on the selected provider, with helpers
-  `getImageProvider()` / `setImageProvider()` (persisted as `slop_image_provider`).
+  `getImageProvider()` / `setImageProvider()` (persisted as `image_provider`).
 - `types.ts`: added the `ImageProvider` (`'gemini' | 'openai'`) type.
 - `components/ProjectEditor.tsx` & `components/agent/AIAgent.tsx`: image-generation
   calls now route through `services/imageService.ts` instead of importing the
