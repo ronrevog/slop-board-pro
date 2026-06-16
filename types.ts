@@ -50,7 +50,14 @@ export interface CinematicSettings {
   colorGrade: string;
 }
 
+/**
+ * Global image-generation backend. Stored in localStorage('image_provider')
+ * and toggled in the project settings panel. 'gemini' is the default.
+ */
+export type ImageProvider = 'gemini' | 'openai';
+
 export type VideoProvider = 'veo' | 'fal-wan' | 'fal-aurora' | 'seedance';
+
 
 export interface VideoProviderSettings {
   provider: VideoProvider;

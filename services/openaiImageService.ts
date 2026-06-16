@@ -1,0 +1,404 @@
+/**
+ * OpenAI GPT Image 2 Service
+ * -------------------------------------------------------------
+ * Alternative image-generation backend that mirrors the three core
+ * functions from geminiService (generateShotImage, alterShotImage,
+ * generateAssetImage) using OpenAI's Image API (`gpt-image-2`).
+ *
+ * Called via the provider router in services/imageService.ts when the
+ * global toggle (localStorage 'image_provider') is set to 'openai'.
+ *
+ * Design notes:
+ * - This is a client-side app, so we call OpenAI's REST endpoints
+ *   directly with the user's key (same security model as the Gemini /
+ *   fal.ai keys already used here). The key lives in
+ *   localStorage('openai_api_key').
+ * - gpt-image-2 processes every image input at HIGH fidelity
+ *   automatically (no input_fidelity param), which is ideal for
+ *   character likeness. We therefore send the selected character
+ *   portrait(s) + location image as reference images on the /edits
+ *   endpoint, and fall back to /generations when there are no refs.
+ * - gpt-image-2 does NOT support transparent backgrounds.
+ */
+
+import { CinematicSettings, Character, Location, Shot } from "../types";
+import { ANAMORPHIC_LENS_PROMPTS, COMPOSITION_PROMPTS } from "../constants";
+
+const OPENAI_IMAGE_GENERATIONS_URL = "https://api.openai.com/v1/images/generations";
+const OPENAI_IMAGE_EDITS_URL = "https://api.openai.com/v1/images/edits";
+const OPENAI_IMAGE_MODEL = "gpt-image-2";
+
+export const getOpenAIApiKey = (): string => {
+  return (
+    (typeof process !== "undefined" && (process as any).env?.OPENAI_API_KEY) ||
+    localStorage.getItem("openai_api_key") ||
+    ""
+  );
+};
+
+// ---- mapping helpers ---------------------------------------------------
+
+const PORTRAIT_RATIOS = new Set(["9:16", "2:3", "3:4", "4:5", "1:4", "1:8"]);
+const SQUARE_RATIOS = new Set(["1:1"]);
+
+/**
+ * Map the project's aspect ratio to a gpt-image-2 supported `size`.
+ * gpt-image-2 accepts many resolutions, but we map to the documented
+ * "popular sizes" for reliability. Ultra-wide cinematic ratios are
+ * approximated to the nearest landscape size.
+ */
+const mapAspectRatioToSize = (ratio: string): string => {
+  if (SQUARE_RATIOS.has(ratio)) return "1024x1024";
+  if (PORTRAIT_RATIOS.has(ratio)) return "1024x1536";
+  return "1536x1024"; // all landscape + ultra-wide ratios
+};
+
+/**
+ * Map the project's resolution preference to gpt-image-2 `quality`.
+ * 'low' is fastest (drafts), 'high' is best detail.
+ */
+const mapResolutionToQuality = (resolution?: string): string => {
+  switch (resolution) {
+    case "4k":
+    case "1080p":
+      return "high";
+    case "720p":
+    case "basic":
+      return "medium";
+    default:
+      return "medium";
+  }
+};
+
+// ---- base64 / blob helpers --------------------------------------------
+
+/** Convert a base64 data URL (or raw base64) into a Blob for FormData uploads. */
+const dataUrlToBlob = (dataUrl: string): Blob => {
+  const hasHeader = dataUrl.includes(",");
+  const header = hasHeader ? dataUrl.split(",")[0] : "";
+  const b64 = hasHeader ? dataUrl.split(",")[1] : dataUrl;
+  const mimeMatch = header.match(/data:([^;]+)/);
+  const mime = mimeMatch ? mimeMatch[1] : "image/png";
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return new Blob([bytes], { type: mime });
+};
+
+// ---- error handling ----------------------------------------------------
+
+const handleOpenAIError = async (response: Response): Promise<never> => {
+  let body: any = null;
+  try {
+    body = await response.json();
+  } catch {
+    /* non-JSON error body */
+  }
+  const err = body?.error || {};
+
+  if (err.code === "moderation_blocked") {
+    const stage = err.moderation_details?.moderation_stage;
+    const categories: string[] = err.moderation_details?.categories || [];
+    let hint = "This request was blocked by OpenAI's content safety filter.";
+    if (categories.length) hint += ` (flagged: ${categories.join(", ")})`;
+    else if (stage === "input") hint += " Try revising the prompt or input images.";
+    else if (stage === "output") hint += " The generated result was blocked — try changing the prompt.";
+    throw new Error(hint);
+  }
+
+  if (response.status === 401) {
+    throw new Error("OpenAI API key is invalid or missing. Check it in Settings.");
+  }
+  if (response.status === 403) {
+    throw new Error(
+      "OpenAI rejected the request (403). gpt-image-2 may require API Organization Verification on your account."
+    );
+  }
+  if (response.status === 429) {
+    throw new Error("OpenAI rate limit / quota exceeded (429). Please retry shortly.");
+  }
+
+  throw new Error(err.message || `OpenAI image request failed (HTTP ${response.status}).`);
+};
+
+const extractB64 = (json: any): string => {
+  const b64 = json?.data?.[0]?.b64_json;
+  if (!b64) throw new Error("OpenAI returned no image data.");
+  return `data:image/png;base64,${b64}`;
+};
+
+// ---- prompt building ---------------------------------------------------
+
+const buildTechnicalSpecs = (shot: Shot, settings: CinematicSettings): string => {
+  const isAnamorphic = settings.lens.startsWith("Panavision C-Series");
+  const anamorphic = isAnamorphic ? ANAMORPHIC_LENS_PROMPTS[settings.lens] : null;
+  const composition =
+    shot.composition && shot.composition !== "None" ? COMPOSITION_PROMPTS[shot.composition] : null;
+
+  return `
+TECHNICAL SPECIFICATIONS
+- Cinematographer Style: ${settings.cinematographer}
+- Film Stock: ${settings.filmStock}
+- Lens: ${settings.lens}
+- Lighting: ${settings.lighting}
+- Shot Type: ${shot.shotType}
+- Camera Move: ${shot.cameraMove}
+- Aspect Ratio: ${settings.aspectRatio}
+${composition ? `\nCOMPOSITION (mandatory): ${shot.composition}\n${composition}` : ""}
+${anamorphic ? `\nANAMORPHIC LENS PHYSICS:\n${anamorphic}\n- Oval bokeh, blue horizontal flares, classic anamorphic look.` : ""}`.trim();
+};
+
+const buildShotTextContext = (
+  activeCharacters: Character[],
+  activeLocation: Location | undefined
+): string => {
+  let ctx = "";
+  if (activeCharacters.length > 0) {
+    ctx += "CHARACTERS IN THIS SHOT:\n";
+    activeCharacters.forEach((c) => {
+      if (c.imageUrl) {
+        ctx += `- "${c.name}": appearance is defined ENTIRELY by this character's reference image. The reference image IS the source of truth for face, age, build, hair, and skin tone.\n`;
+      } else {
+        ctx += `- ${c.name}: ${c.description || "No description"}`;
+        if (c.wardrobe) ctx += ` | Wardrobe: ${c.wardrobe}`;
+        if (c.physicalFeatures) ctx += ` | Physical: ${c.physicalFeatures}`;
+        if (c.age) ctx += ` | Age: ${c.age}`;
+        ctx += "\n";
+      }
+    });
+  }
+  if (activeLocation) {
+    ctx += `\nSHOT LOCATION: "${activeLocation.name}" - ${activeLocation.description || "No description"}`;
+    if (activeLocation.timeOfDay) ctx += ` | Time: ${activeLocation.timeOfDay}`;
+    if (activeLocation.atmosphere) ctx += ` | Atmosphere: ${activeLocation.atmosphere}`;
+    if (activeLocation.weather) ctx += ` | Weather: ${activeLocation.weather}`;
+    ctx += "\n";
+  }
+  return ctx;
+};
+
+const referenceLockClause = (hasCharRef: boolean, hasLocRef: boolean): string => {
+  if (!hasCharRef && !hasLocRef) return "";
+  return `
+=============================================
+REFERENCE LOCK — THE PROVIDED REFERENCE IMAGES ARE THE ONLY AUTHORITY
+=============================================
+- The PEOPLE in this image are defined ONLY by the character reference image(s).
+  Reproduce each character's exact face, bone structure, eye color, hairline,
+  skin tone, age, and build. Do NOT age, stylize, beautify, or swap faces.
+- The ENVIRONMENT is defined ONLY by the location reference image. Reproduce that
+  exact place; do NOT invent a different room or landscape.
+- Do NOT add, invent, or borrow any other person or face from anywhere.
+- Use the written description ONLY for pose, action, framing, expression, wardrobe
+  context, and lighting mood — NEVER to override the reference images on identity
+  or environment.`;
+};
+
+const buildDialogueContext = (shot: Shot, allCharacters: Character[]): string => {
+  if (!shot.dialogueLines || shot.dialogueLines.length === 0) return "";
+  let ctx = "\nDIALOGUE (characters may be speaking/reacting):\n";
+  shot.dialogueLines.forEach((line) => {
+    const speaker = allCharacters.find((c) => c.id === line.speakerId)?.name || "Unknown";
+    ctx += `- ${speaker}: "${line.text}"\n`;
+  });
+  return ctx;
+};
+
+// ---- reference image collection ---------------------------------------
+
+interface RefImage {
+  dataUrl: string;
+}
+
+/** Collect the reference images for a shot (character portraits + selected
+ * turnarounds, then location image + selected turnarounds). Capped to keep
+ * token cost reasonable since gpt-image-2 processes all inputs at high fidelity. */
+const collectShotReferences = (
+  activeCharacters: Character[],
+  activeLocation: Location | undefined
+): RefImage[] => {
+  const refs: RefImage[] = [];
+
+  activeCharacters
+    .filter((c) => c.imageUrl)
+    .slice(0, 3)
+    .forEach((c) => {
+      refs.push({ dataUrl: c.imageUrl! });
+      const selected = (c.turnaroundImages || []).filter((t) => t.isSelected).slice(0, 1);
+      selected.forEach((t) => refs.push({ dataUrl: t.imageUrl }));
+    });
+
+  if (activeLocation?.imageUrl) {
+    refs.push({ dataUrl: activeLocation.imageUrl });
+    const selectedLoc = (activeLocation.turnaroundImages || []).filter((t) => t.isSelected).slice(0, 1);
+    selectedLoc.forEach((t) => refs.push({ dataUrl: t.imageUrl }));
+  }
+
+  return refs;
+};
+
+// ---- request executors -------------------------------------------------
+
+const requestGeneration = async (prompt: string, size: string, quality: string): Promise<string> => {
+  const apiKey = getOpenAIApiKey();
+  if (!apiKey) throw new Error("OpenAI API key is required. Add it in Settings.");
+
+  const response = await fetch(OPENAI_IMAGE_GENERATIONS_URL, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: OPENAI_IMAGE_MODEL,
+      prompt,
+      size,
+      quality,
+      n: 1,
+    }),
+  });
+
+  if (!response.ok) await handleOpenAIError(response);
+  return extractB64(await response.json());
+};
+
+const requestEdit = async (
+  prompt: string,
+  size: string,
+  quality: string,
+  images: RefImage[]
+): Promise<string> => {
+  const apiKey = getOpenAIApiKey();
+  if (!apiKey) throw new Error("OpenAI API key is required. Add it in Settings.");
+
+  const form = new FormData();
+  form.append("model", OPENAI_IMAGE_MODEL);
+  form.append("prompt", prompt);
+  form.append("size", size);
+  form.append("quality", quality);
+  form.append("n", "1");
+  images.forEach((img, i) => {
+    form.append("image[]", dataUrlToBlob(img.dataUrl), `ref_${i}.png`);
+  });
+
+  const response = await fetch(OPENAI_IMAGE_EDITS_URL, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${apiKey}` }, // do NOT set Content-Type — browser sets multipart boundary
+    body: form,
+  });
+
+  if (!response.ok) await handleOpenAIError(response);
+  return extractB64(await response.json());
+};
+
+// ---- public API --------------------------------------------------------
+
+/**
+ * Generate an asset (Character/Location) reference image from text.
+ */
+export const generateAssetImageOpenAI = async (
+  type: "Character" | "Location",
+  name: string,
+  description: string,
+  settings: CinematicSettings
+): Promise<string> => {
+  const prompt =
+    type === "Character"
+      ? `Full body character design sheet, cinematic lighting, clean studio background. Character: ${name}. Description: ${description}. Photorealistic, shot on ${settings.filmStock}, ${settings.lighting} lighting.`
+      : `Cinematic wide establishing shot of a location. Location: ${name}. Description: ${description}. Photorealistic, shot on ${settings.filmStock}, ${settings.cinematographer} style.`;
+
+  const size = type === "Character" ? "1024x1024" : mapAspectRatioToSize(settings.aspectRatio);
+  return requestGeneration(prompt, size, mapResolutionToQuality(settings.resolution));
+};
+
+/**
+ * Generate a cinematic keyframe for a shot using gpt-image-2.
+ * Uses the /edits endpoint with character + location references when
+ * available; otherwise falls back to text-only /generations.
+ */
+export const generateShotImageOpenAI = async (
+  shot: Shot,
+  settings: CinematicSettings,
+  allCharacters: Character[],
+  allLocations: Location[],
+  _allShots: Shot[] = []
+): Promise<string> => {
+  const activeCharacters = allCharacters.filter((c) => shot.characters.includes(c.id));
+  const activeLocation = allLocations.find((l) => l.id === shot.locationId);
+
+  const references = collectShotReferences(activeCharacters, activeLocation);
+  const hasCharRef = activeCharacters.some((c) => c.imageUrl);
+  const hasLocRef = !!activeLocation?.imageUrl;
+
+  const prompt = `
+TASK: Generate a high-fidelity cinematic movie keyframe.
+
+${buildShotTextContext(activeCharacters, activeLocation)}
+
+SCENE ACTION & VISUAL DESCRIPTION
+Action: ${shot.action}
+Visual Description: ${shot.description}
+${buildDialogueContext(shot, allCharacters)}
+
+${buildTechnicalSpecs(shot, settings)}
+
+Render with masterpiece quality: professional color grading, realistic textures, volumetric lighting.
+ONLY the characters listed above should appear as people in the image — do not add any other people or faces.
+${referenceLockClause(hasCharRef, hasLocRef)}`.trim();
+
+  const size = mapAspectRatioToSize(settings.aspectRatio);
+  const quality = mapResolutionToQuality(settings.resolution);
+
+  if (references.length > 0) {
+    return requestEdit(prompt, size, quality, references);
+  }
+  return requestGeneration(prompt, size, quality);
+};
+
+/**
+ * Alter an existing shot image (re-frame / re-angle) using gpt-image-2.
+ * Sends the current image as the primary base, plus character + location refs.
+ */
+export const alterShotImageOpenAI = async (
+  shot: Shot,
+  settings: CinematicSettings,
+  allCharacters: Character[],
+  allLocations: Location[],
+  _allShots: Shot[] = []
+): Promise<string> => {
+  if (!shot.imageUrl) throw new Error("No image to alter");
+
+  const activeCharacters = allCharacters.filter((c) => shot.characters.includes(c.id));
+  const activeLocation = allLocations.find((l) => l.id === shot.locationId);
+
+  const hasCharRef = activeCharacters.some((c) => c.imageUrl);
+  const hasLocRef = !!activeLocation?.imageUrl;
+
+  // Current image FIRST (the base to transform), then supporting references.
+  const references: RefImage[] = [{ dataUrl: shot.imageUrl }];
+  collectShotReferences(activeCharacters, activeLocation).forEach((r) => references.push(r));
+
+  const prompt = `
+TASK: Alter and refine the FIRST provided image (the current shot).
+
+Transform its composition to strictly match:
+- NEW Shot Type: ${shot.shotType}
+- NEW Camera Move: ${shot.cameraMove}
+
+${buildShotTextContext(activeCharacters, activeLocation)}
+
+SCENE ACTION & VISUAL DESCRIPTION
+Action: ${shot.action}
+Visual Description: ${shot.description}
+
+${buildTechnicalSpecs(shot, settings)}
+
+Maintain the identity of the characters and the details of the location across the re-frame.
+ONLY the characters from the references should appear as people — do not add any other people or faces.
+${referenceLockClause(hasCharRef, hasLocRef)}`.trim();
+
+  const size = mapAspectRatioToSize(settings.aspectRatio);
+  const quality = mapResolutionToQuality(settings.resolution);
+
+  return requestEdit(prompt, size, quality, references);
+};

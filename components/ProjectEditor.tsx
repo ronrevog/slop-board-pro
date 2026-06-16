@@ -1,6 +1,8 @@
 
 import React, { useState, useEffect } from 'react';
-import { analyzeScript, analyzeScreenplayPDF, extractTextFromPDF, generateShotImage, editImage, generateAssetImage, alterShotImage, generateShotVideo, extendShotVideo, updateAssetWithDetails, generateCoverageShots, upscaleImage, generateCharacterTurnaround, generateLocationTurnaround, chatEditImage } from '../services/geminiService';
+import { analyzeScript, analyzeScreenplayPDF, extractTextFromPDF, editImage, generateShotVideo, extendShotVideo, updateAssetWithDetails, generateCoverageShots, upscaleImage, generateCharacterTurnaround, generateLocationTurnaround, chatEditImage } from '../services/geminiService';
+import { generateShotImage, alterShotImage, generateAssetImage, getImageProvider, setImageProvider } from '../services/imageService';
+
 import { Project, Shot, CinematicSettings, Character, Location, VideoSegment, Scene, ImageHistoryEntry, VideoProviderSettings, DEFAULT_VIDEO_SETTINGS, TurnaroundImage } from '../types';
 import { CINEMATOGRAPHERS, FILM_STOCKS, LENSES, LIGHTING_STYLES, ASPECT_RATIOS, RESOLUTIONS, ANAMORPHIC_LENS_PROMPTS } from '../constants';
 import { ShotCard } from './ShotCard';
@@ -84,6 +86,14 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ initialProject, on
     localStorage.getItem('gemini_api_key') ? 'saved' : 'idle'
   );
 
+  // OpenAI API Key + GLOBAL image-engine toggle (persisted in localStorage)
+  const [openaiApiKey, setOpenaiApiKey] = useState<string>(() => localStorage.getItem('openai_api_key') || '');
+  const [openaiKeyStatus, setOpenaiKeyStatus] = useState<'idle' | 'saved'>(() =>
+    localStorage.getItem('openai_api_key') ? 'saved' : 'idle'
+  );
+  const [imageProvider, setImageProviderState] = useState<'gemini' | 'openai'>(() => getImageProvider());
+
+
   // Master API key save status
   const [masterKeySaved, setMasterKeySaved] = useState(false);
 
@@ -143,6 +153,12 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ initialProject, on
       localStorage.setItem('gemini_api_key', googleApiKey.trim());
       setGoogleKeyStatus('saved');
     }
+    // OpenAI key
+    if (openaiApiKey.trim()) {
+      localStorage.setItem('openai_api_key', openaiApiKey.trim());
+      setOpenaiKeyStatus('saved');
+    }
+
     // fal.ai key
     const falKey = project.videoSettings?.falApiKey;
     if (falKey?.trim()) {
@@ -2787,7 +2803,80 @@ TIP: Select (highlight) a portion of text and click 'Analyze Scene' to analyze o
                   </p>
                 </div>
 
+                {/* OpenAI API Key */}
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-neutral-500 uppercase tracking-widest">
+                    OpenAI API Key <span className="text-neutral-600">(GPT Image 2)</span>
+                  </label>
+                  <div className="flex gap-2">
+                    <input
+                      type="password"
+                      className={`flex-1 bg-neutral-800 border rounded-md p-3 text-sm text-white focus:ring-1 focus:ring-sky-500 outline-none ${openaiKeyStatus === 'saved' ? 'border-sky-600' : 'border-neutral-700'
+                        }`}
+                      placeholder="Enter your OpenAI API key (sk-...)..."
+                      value={openaiApiKey}
+                      onChange={(e) => {
+                        setOpenaiApiKey(e.target.value);
+                        setOpenaiKeyStatus('idle');
+                      }}
+                    />
+                    <Button
+                      variant={openaiKeyStatus === 'saved' ? 'secondary' : 'primary'}
+                      onClick={() => {
+                        if (!openaiApiKey.trim()) return;
+                        localStorage.setItem('openai_api_key', openaiApiKey.trim());
+                        setOpenaiKeyStatus('saved');
+                      }}
+                      disabled={!openaiApiKey.trim()}
+                      className="whitespace-nowrap"
+                    >
+                      {openaiKeyStatus === 'saved' ? '✓ Saved' : 'Save Key'}
+                    </Button>
+                  </div>
+                  {openaiKeyStatus === 'saved' && (
+                    <p className="text-xs text-sky-500 flex items-center gap-1">
+                      <CheckSquare className="w-3 h-3" /> OpenAI API key saved to browser
+                    </p>
+                  )}
+                  <p className="text-xs text-neutral-600">
+                    Powers the GPT Image 2 backend for storyboard / asset image generation. Get yours from <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer" className="text-sky-500 hover:underline">platform.openai.com/api-keys</a>
+                  </p>
+                </div>
+
+                {/* Image Engine Toggle — GLOBAL (persists across projects) */}
+                <div className="space-y-2 pt-2">
+                  <label className="text-xs font-bold text-neutral-500 uppercase tracking-widest flex items-center gap-2">
+                    <ImageIcon className="w-3 h-3" /> Image Generation Engine
+                  </label>
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      onClick={() => { setImageProvider('gemini'); setImageProviderState('gemini'); }}
+                      className={`p-4 rounded-lg border-2 transition-all text-left ${imageProvider === 'gemini'
+                        ? 'border-red-600 bg-red-900/20 text-white'
+                        : 'border-neutral-700 bg-neutral-800/50 text-neutral-400 hover:border-neutral-500'
+                        }`}
+                    >
+                      <div className="font-bold text-sm mb-1">Gemini (Nano Banana)</div>
+                      <div className="text-xs text-neutral-500">Default · Google AI Studio key</div>
+                    </button>
+                    <button
+                      onClick={() => { setImageProvider('openai'); setImageProviderState('openai'); }}
+                      className={`p-4 rounded-lg border-2 transition-all text-left ${imageProvider === 'openai'
+                        ? 'border-sky-600 bg-sky-900/20 text-white'
+                        : 'border-neutral-700 bg-neutral-800/50 text-neutral-400 hover:border-neutral-500'
+                        }`}
+                    >
+                      <div className="font-bold text-sm mb-1">GPT Image 2 (OpenAI)</div>
+                      <div className="text-xs text-neutral-500">OpenAI key · high-fidelity refs</div>
+                    </button>
+                  </div>
+                  <p className="text-xs text-neutral-600">
+                    Global setting — applies to storyboard frames, alters, and character/location images across all projects. Video, upscaling, and chat-edit always use Gemini.
+                  </p>
+                </div>
+
                 {/* Master Save All Keys */}
+
                 <div className="pt-4 border-t border-neutral-700">
                   <Button
                     variant={masterKeySaved ? 'secondary' : 'primary'}

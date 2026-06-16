@@ -38,6 +38,67 @@ export const validateFalApiKey = async (apiKey: string): Promise<{ valid: boolea
     return { valid: false, error: 'API key appears to be invalid format' };
 };
 
+/**
+ * Extract a human-readable message from a fal.ai SDK error.
+ *
+ * The fal client throws a `ValidationError` (HTTP 422) whose useful information
+ * lives in `error.body.detail` - NOT in `error.message` (which is just
+ * "ValidationError"). `detail` is either a plain string or an array of
+ * `{ loc, msg, type }` objects produced by the model's Pydantic validation
+ * and/or its content-moderation layer. We surface that here so callers see the
+ * real reason (a malformed field, or content rejected by fal's moderation)
+ * instead of an opaque 422.
+ */
+export const parseFalError = (error: any, fallback: string): string => {
+    if (error?.status === 401 || error?.message?.includes('401')) {
+        return 'fal.ai API key is invalid. Please check your key in Settings.';
+    }
+    if (error?.status === 403 || error?.message?.includes('403')) {
+        return 'fal.ai API key does not have permission for this model.';
+    }
+    if (error?.message?.includes('CORS') || error?.message?.includes('Load failed')) {
+        return 'Network error - please check your connection and try again.';
+    }
+
+    const detail = error?.body?.detail ?? error?.detail;
+    if (detail) {
+        let detailMsg: string;
+        if (typeof detail === 'string') {
+            detailMsg = detail;
+        } else if (Array.isArray(detail)) {
+            detailMsg = detail
+                .map((d: any) => {
+                    if (typeof d === 'string') return d;
+                    const loc = Array.isArray(d?.loc) ? d.loc.filter((p: any) => p !== 'body').join('.') : '';
+                    return loc ? `${loc}: ${d?.msg ?? ''}`.trim() : (d?.msg ?? JSON.stringify(d));
+                })
+                .filter(Boolean)
+                .join('; ');
+        } else {
+            detailMsg = JSON.stringify(detail);
+        }
+
+        const lower = detailMsg.toLowerCase();
+        if (
+            lower.includes('nsfw') ||
+            lower.includes('safety') ||
+            lower.includes('moderation') ||
+            lower.includes('content policy') ||
+            lower.includes('flagged') ||
+            lower.includes('explicit')
+        ) {
+            return `fal.ai rejected this content: ${detailMsg}. Note: disabling the safety checker only turns off the optional moderation layer - fal.ai still enforces a platform-level content policy that cannot be bypassed.`;
+        }
+        return `fal.ai validation error (422): ${detailMsg}`;
+    }
+
+    if (error?.status === 422) {
+        return 'fal.ai returned a 422 validation error with no detail. Check that the prompt, duration, and resolution are within allowed limits, and that the source image is under 20 MB.';
+    }
+
+    return error?.message || fallback;
+};
+
 // Helper to prepare image URL (fal SDK accepts data URIs)
 const prepareImageUrl = async (imageUrl: string): Promise<string> => {
     if (imageUrl.startsWith('http://') || imageUrl.startsWith('https://')) {
@@ -170,19 +231,7 @@ export const generateWanVideo = async (
         }
     } catch (error: any) {
         console.error('fal.ai SDK error:', error);
-
-        // Handle specific error types
-        if (error.status === 401 || error.message?.includes('401')) {
-            throw new Error('fal.ai API key is invalid. Please check your key in Settings.');
-        }
-        if (error.status === 403 || error.message?.includes('403')) {
-            throw new Error('fal.ai API key does not have permission for this model.');
-        }
-        if (error.message?.includes('CORS') || error.message?.includes('Load failed')) {
-            throw new Error('Network error - please check your connection and try again.');
-        }
-
-        throw new Error(error.message || 'fal.ai video generation failed');
+        throw new Error(parseFalError(error, 'fal.ai video generation failed'));
     }
 };
 
@@ -299,13 +348,7 @@ export const generateKlingV2VReference = async (
         }
     } catch (error: any) {
         console.error('Kling V2V SDK error:', error);
-        if (error.status === 401 || error.message?.includes('401')) {
-            throw new Error('fal.ai API key is invalid. Please check your key in Settings.');
-        }
-        if (error.status === 403 || error.message?.includes('403')) {
-            throw new Error('fal.ai API key does not have permission for the Kling model.');
-        }
-        throw new Error(error.message || 'Kling V2V video generation failed');
+        throw new Error(parseFalError(error, 'Kling V2V video generation failed'));
     }
 };
 
@@ -400,13 +443,7 @@ export const generateKlingV26MotionControl = async (
         }
     } catch (error: any) {
         console.error('Kling v2.6 Motion Control error:', error);
-        if (error.status === 401 || error.message?.includes('401')) {
-            throw new Error('fal.ai API key is invalid.');
-        }
-        if (error.status === 403 || error.message?.includes('403')) {
-            throw new Error('fal.ai API key does not have permission for this model.');
-        }
-        throw new Error(error.message || 'Kling v2.6 Motion Control failed');
+        throw new Error(parseFalError(error, 'Kling v2.6 Motion Control failed'));
     }
 };
 
@@ -581,18 +618,6 @@ export const generateAuroraVideo = async (
         }
     } catch (error: any) {
         console.error('Aurora SDK error:', error);
-
-        // Handle specific error types
-        if (error.status === 401 || error.message?.includes('401')) {
-            throw new Error('fal.ai API key is invalid. Please check your key in Settings.');
-        }
-        if (error.status === 403 || error.message?.includes('403')) {
-            throw new Error('fal.ai API key does not have permission for the Aurora model.');
-        }
-        if (error.message?.includes('CORS') || error.message?.includes('Load failed')) {
-            throw new Error('Network error - please check your connection and try again.');
-        }
-
-        throw new Error(error.message || 'Aurora video generation failed');
+        throw new Error(parseFalError(error, 'Aurora video generation failed'));
     }
 };

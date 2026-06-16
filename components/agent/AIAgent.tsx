@@ -2,7 +2,9 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Project, Shot, Scene, Character, Location, CinematicSettings } from '../../types';
 import { Bot, X, Send, Loader2, ChevronDown, ChevronUp, Trash2, AlertCircle, Undo2, Redo2 } from 'lucide-react';
 import { GoogleGenAI } from '@google/genai';
-import { generateAssetImage, generateShotImage, generateShotVideo } from '../../services/geminiService';
+import { generateShotVideo } from '../../services/geminiService';
+import { generateAssetImage, generateShotImage } from '../../services/imageService';
+
 import { generateWanVideo } from '../../services/falService';
 
 // ─────────────────────────────────────────────────────────────────────────────
