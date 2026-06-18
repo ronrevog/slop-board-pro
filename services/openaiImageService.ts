@@ -165,15 +165,24 @@ const buildTechnicalSpecs = (shot: Shot, settings: CinematicSettings): string =>
   const composition =
     shot.composition && shot.composition !== "None" ? COMPOSITION_PROMPTS[shot.composition] : null;
 
+  // Every cinematic setting is fed through so gpt-image-2 honours the SAME
+  // inputs the Gemini backend uses (plus colorGrade + resolution, which the
+  // app exposes but Gemini's prompt historically omitted).
+  const lines = [
+    `- Cinematographer Style: ${settings.cinematographer}`,
+    `- Film Stock: ${settings.filmStock}`,
+    `- Lens: ${settings.lens}`,
+    `- Lighting: ${settings.lighting}`,
+    settings.colorGrade ? `- Color Grade: ${settings.colorGrade}` : "",
+    `- Shot Type: ${shot.shotType}`,
+    `- Camera Move: ${shot.cameraMove}`,
+    `- Aspect Ratio: ${settings.aspectRatio}`,
+    settings.resolution ? `- Target Detail / Resolution: ${settings.resolution}` : "",
+  ].filter(Boolean);
+
   return `
 TECHNICAL SPECIFICATIONS
-- Cinematographer Style: ${settings.cinematographer}
-- Film Stock: ${settings.filmStock}
-- Lens: ${settings.lens}
-- Lighting: ${settings.lighting}
-- Shot Type: ${shot.shotType}
-- Camera Move: ${shot.cameraMove}
-- Aspect Ratio: ${settings.aspectRatio}
+${lines.join("\n")}
 ${composition ? `\nCOMPOSITION (mandatory): ${shot.composition}\n${composition}` : ""}
 ${anamorphic ? `\nANAMORPHIC LENS PHYSICS:\n${anamorphic}\n- Oval bokeh, blue horizontal flares, classic anamorphic look.` : ""}`.trim();
 };
@@ -187,21 +196,29 @@ const buildShotTextContext = (
     ctx += "CHARACTERS IN THIS SHOT:\n";
     activeCharacters.forEach((c) => {
       if (c.imageUrl) {
-        ctx += `- "${c.name}": appearance is defined ENTIRELY by this character's reference image. The reference image IS the source of truth for face, age, build, hair, and skin tone.\n`;
+        ctx += `- "${c.name}": facial identity, age, build, hair, and skin tone are defined ENTIRELY by this character's reference image (the source of truth).`;
+        // Wardrobe / occupation are scene context, not identity — safe to pass through alongside the locked portrait.
+        if (c.wardrobe) ctx += ` Wardrobe context: ${c.wardrobe}.`;
+        if (c.occupation) ctx += ` Occupation: ${c.occupation}.`;
+        ctx += "\n";
       } else {
         ctx += `- ${c.name}: ${c.description || "No description"}`;
-        if (c.wardrobe) ctx += ` | Wardrobe: ${c.wardrobe}`;
-        if (c.physicalFeatures) ctx += ` | Physical: ${c.physicalFeatures}`;
         if (c.age) ctx += ` | Age: ${c.age}`;
+        if (c.physicalFeatures) ctx += ` | Physical: ${c.physicalFeatures}`;
+        if (c.wardrobe) ctx += ` | Wardrobe: ${c.wardrobe}`;
+        if (c.occupation) ctx += ` | Occupation: ${c.occupation}`;
+        if (c.personality) ctx += ` | Personality / demeanor: ${c.personality}`;
         ctx += "\n";
       }
     });
   }
   if (activeLocation) {
     ctx += `\nSHOT LOCATION: "${activeLocation.name}" - ${activeLocation.description || "No description"}`;
-    if (activeLocation.timeOfDay) ctx += ` | Time: ${activeLocation.timeOfDay}`;
-    if (activeLocation.atmosphere) ctx += ` | Atmosphere: ${activeLocation.atmosphere}`;
+    if (activeLocation.timeOfDay) ctx += ` | Time of Day: ${activeLocation.timeOfDay}`;
     if (activeLocation.weather) ctx += ` | Weather: ${activeLocation.weather}`;
+    if (activeLocation.atmosphere) ctx += ` | Atmosphere: ${activeLocation.atmosphere}`;
+    if (activeLocation.keyProps) ctx += ` | Key Props: ${activeLocation.keyProps}`;
+    if (activeLocation.practicalLighting) ctx += ` | Practical Lighting: ${activeLocation.practicalLighting}`;
     ctx += "\n";
   }
   return ctx;
@@ -233,6 +250,12 @@ const buildDialogueContext = (shot: Shot, allCharacters: Character[]): string =>
   });
   return ctx;
 };
+
+/** Director's free-text notes for the shot, applied as an explicit directive. */
+const buildDirectorNotes = (shot: Shot): string =>
+  shot.notes && shot.notes.trim()
+    ? `\nDIRECTOR'S NOTES (apply these):\n${shot.notes.trim()}\n`
+    : "";
 
 // ---- reference image collection ---------------------------------------
 
@@ -333,10 +356,11 @@ export const generateAssetImageOpenAI = async (
   description: string,
   settings: CinematicSettings
 ): Promise<string> => {
+  const grade = settings.colorGrade ? `, ${settings.colorGrade} color grade` : "";
   const prompt =
     type === "Character"
-      ? `Full body character design sheet, cinematic lighting, clean studio background. Character: ${name}. Description: ${description}. Photorealistic, shot on ${settings.filmStock}, ${settings.lighting} lighting.`
-      : `Cinematic wide establishing shot of a location. Location: ${name}. Description: ${description}. Photorealistic, shot on ${settings.filmStock}, ${settings.cinematographer} style.`;
+      ? `Full body character design sheet, cinematic lighting, clean neutral studio background. Character: ${name}. Description: ${description}. Photorealistic, shot on ${settings.filmStock} with ${settings.lens}, ${settings.lighting} lighting${grade}, in the style of ${settings.cinematographer}.`
+      : `Cinematic wide establishing shot of a location. Location: ${name}. Description: ${description}. Photorealistic, shot on ${settings.filmStock} with ${settings.lens}, ${settings.lighting} lighting${grade}, in the style of ${settings.cinematographer}.`;
 
   const size = type === "Character" ? "1024x1024" : mapAspectRatioToSize(settings.aspectRatio);
   return requestGeneration(prompt, size, mapResolutionToQuality(settings.resolution));
@@ -370,10 +394,10 @@ SCENE ACTION & VISUAL DESCRIPTION
 Action: ${shot.action}
 Visual Description: ${shot.description}
 ${buildDialogueContext(shot, allCharacters)}
-
+${buildDirectorNotes(shot)}
 ${buildTechnicalSpecs(shot, settings)}
 
-Render with masterpiece quality: professional color grading, realistic textures, volumetric lighting.
+Render with masterpiece quality: honour the color grade and film stock above, with realistic textures and volumetric lighting.
 ONLY the characters listed above should appear as people in the image — do not add any other people or faces.
 ${referenceLockClause(hasCharRef, hasLocRef)}`.trim();
 
@@ -421,7 +445,8 @@ ${buildShotTextContext(activeCharacters, activeLocation)}
 SCENE ACTION & VISUAL DESCRIPTION
 Action: ${shot.action}
 Visual Description: ${shot.description}
-
+${buildDialogueContext(shot, allCharacters)}
+${buildDirectorNotes(shot)}
 ${buildTechnicalSpecs(shot, settings)}
 
 Maintain the identity of the characters and the details of the location across the re-frame.

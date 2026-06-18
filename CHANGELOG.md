@@ -5,6 +5,28 @@ All notable changes to Slop Board Pro are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to semantic versioning where practical.
 
+## [1.5.3] — 2026-06-18
+
+### Improved — GPT Image 2 now uses every cinematic input, consistently
+
+Brought the OpenAI / GPT Image 2 prompt builder to full parity with (and slightly
+beyond) the Gemini backend so the same characters, environments, and look settings
+drive both engines.
+
+- `services/openaiImageService.ts`:
+  - **Technical specs** now include `colorGrade` and target `resolution` (in addition
+    to cinematographer, film stock, lens, lighting, shot type, camera move, aspect
+    ratio, composition, and anamorphic physics).
+  - **Characters** now pass through `occupation` and `personality` (alongside
+    description, age, physical features, and wardrobe); locked-portrait characters
+    still pass wardrobe/occupation as scene context without overriding identity.
+  - **Locations** now include `keyProps` and `practicalLighting` (alongside time of
+    day, weather, and atmosphere).
+  - **Director's notes** (`shot.notes`) are now injected as an explicit directive.
+  - **Alter / re-frame** path now also includes dialogue context and director's notes.
+  - **Asset (character/location) generation** now folds in `lens`, `colorGrade`, and
+    `cinematographer` style for consistency with shot keyframes.
+
 ## [1.5.2] — 2026-06-16
 
 ### Fixed — GPT Image 2 crashed (`atob` InvalidCharacterError) on cloud-synced projects
